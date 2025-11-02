@@ -68,7 +68,7 @@ int main(void)
 
   /* USER CODE BEGIN 1 */
 
-	//First GitHub push   asSD
+	//First GitHub push - changes check
 
   /* USER CODE END 1 */
 
