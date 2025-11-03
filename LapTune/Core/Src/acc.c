@@ -9,9 +9,6 @@
 #include "acc.h"
 #include <math.h>
 
-// Sensitivity for ±2g @ 16-bit resolution (datasheet)
-#define LIS3DH_SENS_2G 0.000098f   // 61 µg/LSB = 0.000061 g/LSB
-
 uint8_t LIS3DH_ReadReg(uint8_t reg)
 {
     uint8_t tx = reg | 0x80; // READ bit
@@ -42,10 +39,10 @@ uint8_t LIS3DH_Init(void)
     if (id != 0x33) return 0; // Wrong ID
 
     // 100Hz | XYZ enabled | normal mode
-    LIS3DH_WriteReg(LIS3DH_CTRL_REG1, 0x57);
+    LIS3DH_WriteReg(LIS3DH_CTRL_REG1, LIS3DH_CTRL_REG1_CONF);
 
     // ±2g | High-resolution 16-bit
-    LIS3DH_WriteReg(LIS3DH_CTRL_REG4, 0x08);
+    LIS3DH_WriteReg(LIS3DH_CTRL_REG4, LIS3DH_CTRL_REG4_CONF);
 
     return 1;
 }
@@ -60,16 +57,12 @@ void LIS3DH_ReadXYZ(float *ax, float *ay, float *az)
     HAL_SPI_Receive(&hspi2, raw, 6, HAL_MAX_DELAY);
     LIS3DH_CS_HIGH();
 
-    int16_t x = (int16_t)((raw[1] << 8) | raw[0]);
-    int16_t y = (int16_t)((raw[3] << 8) | raw[2]);
-    int16_t z = (int16_t)((raw[5] << 8) | raw[4]);
+    int16_t x = (int16_t)((raw[1] << 8) | raw[0]) >> 4;
+    int16_t y = (int16_t)((raw[3] << 8) | raw[2]) >> 4;
+    int16_t z = (int16_t)((raw[5] << 8) | raw[4]) >> 4;
 
-    // High resolution format → shift right by 4 bits
-    x >>= 4;
-    y >>= 4;
-    z >>= 4;
-
-    *ax = x * LIS3DH_SENS_2G;
-    *ay = y * LIS3DH_SENS_2G;
-    *az = z * LIS3DH_SENS_2G;
+    // Convert to g
+    *ax = x * LIS3DH_SENS_16G;
+    *ay = y * LIS3DH_SENS_16G;
+    *az = z * LIS3DH_SENS_16G;
 }

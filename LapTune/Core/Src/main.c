@@ -48,7 +48,7 @@ UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 
-float ax, ay, az;
+float ax, max_x=0, min_x=0, ay, max_y=0, min_y=0, az, max_z=0, min_z=0;
 
 /* USER CODE END PV */
 
@@ -80,17 +80,26 @@ int main(void)
 	 MX_GPIO_Init();
 	 MX_SPI2_Init();
 
-	 if (!LIS3DH_Init()) {
-	     printf("LIS3DH not detected!\n");
-	 } else {
-	     printf("LIS3DH OK\n");
+	 if (!LIS3DH_Init())
+	 {
+	     //ACC not detected
+	 } else
+	 {
+		 //ACC detected
 	 }
 
 	 while (1)
 	 {
 	     LIS3DH_ReadXYZ(&ax, &ay, &az);
-	     float X = ax;
-	     printf("%f,%f,%f\n", ax, ay, az); // Do CubeIDE Plotter
+	     if(ax > max_x){max_x = ax;}
+	     if(ax < min_x){min_x = ax;}
+
+	     if(ay > max_y){max_y = ay;}
+	     if(ay < min_y){min_y = ay;}
+
+	     if(az > max_z){max_z = az;}
+	     if(az < min_z){min_z = az;}
+
 	     HAL_Delay(10);
 	 }
 

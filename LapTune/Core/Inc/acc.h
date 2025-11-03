@@ -10,14 +10,22 @@
 
 #include "stm32f1xx_hal.h"
 
-#define LIS3DH_WHO_AM_I      0x0F
-#define LIS3DH_CTRL_REG1     0x20
-#define LIS3DH_CTRL_REG4     0x23
-#define LIS3DH_OUT_X_L       0x28
+//Registers adresses
+#define LIS3DH_WHO_AM_I		0x0F
+#define LIS3DH_CTRL_REG1	0x20
+#define LIS3DH_CTRL_REG4	0x23
+#define LIS3DH_OUT_X_L		0x28
+
+//Registers configurations
+#define LIS3DH_CTRL_REG1_CONF	0x57		//ODR config - (100 Hz), XYZ enabled
+#define LIS3DH_CTRL_REG4_CONF	0xB8		//Config +/-16g, high resolution mode
+
+// Sensitivity for ±16g @ High-Resolution (12-bit effective: 2048 steps per +16g)
+#define LIS3DH_SENS_16G      0.012f // g per LSB
+
 
 #define LIS3DH_CS_PORT       GPIOB
 #define LIS3DH_CS_PIN        GPIO_PIN_12
-
 #define LIS3DH_CS_LOW()      HAL_GPIO_WritePin(LIS3DH_CS_PORT, LIS3DH_CS_PIN, GPIO_PIN_RESET)
 #define LIS3DH_CS_HIGH()     HAL_GPIO_WritePin(LIS3DH_CS_PORT, LIS3DH_CS_PIN, GPIO_PIN_SET)
 
