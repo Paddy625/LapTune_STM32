@@ -14,10 +14,10 @@
 #define TFT_HEIGHT 128U
 #endif
 #ifndef TFT_X_OFFSET
-#define TFT_X_OFFSET 1U
+#define TFT_X_OFFSET 0U
 #endif
 #ifndef TFT_Y_OFFSET
-#define TFT_Y_OFFSET 2U
+#define TFT_Y_OFFSET 0U
 #endif
 #ifndef TFT_MADCTL
 #define TFT_MADCTL 0x68U /* MX | MV | BGR; landscape rotated 180 degrees */

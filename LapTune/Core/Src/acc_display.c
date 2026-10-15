@@ -19,11 +19,11 @@ HAL_StatusTypeDef AccDisplay_Init(void)
 {
     field = 0U; pending = 0U;
     last_refresh = HAL_GetTick() - 100U;
-    if (TFT_Text(38, 2, "LAPTUNE", 2, TFT_CYAN, TFT_BLACK) != HAL_OK)
+    if (TFT_Text(3, 2, "LAPTUNE ALPHA", 2, TFT_CYAN, TFT_BLACK) != HAL_OK)
         return HAL_ERROR;
-    if (TFT_Text(34, 21, "LIS3DH +/-16G", 1, TFT_WHITE, TFT_BLACK) != HAL_OK)
+    if (TFT_Text(20, 21, "ACCELEROMETER +/-16G", 1, TFT_WHITE, TFT_BLACK) != HAL_OK)
         return HAL_ERROR;
-    return TFT_Text(4, 120, "ODR 100HZ  G", 1, TFT_GREY, TFT_BLACK);
+    return TFT_Text(4, 120, "ADAM TWARDOWSKI", 1, TFT_GREY, TFT_BLACK);
 }
 
 HAL_StatusTypeDef AccDisplay_Update(uint32_t now, const float current[3],
