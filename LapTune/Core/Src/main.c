@@ -23,6 +23,7 @@
 /* USER CODE BEGIN Includes */
 
 #include "acc.h"
+#include "acc_display.h"
 
 /* USER CODE END Includes */
 
@@ -42,6 +43,7 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+SPI_HandleTypeDef hspi1;
 SPI_HandleTypeDef hspi2;
 
 UART_HandleTypeDef huart2;
@@ -49,6 +51,8 @@ UART_HandleTypeDef huart2;
 /* USER CODE BEGIN PV */
 
 float ax, max_x=0, min_x=0, ay, max_y=0, min_y=0, az, max_z=0, min_z=0;
+static uint8_t sensor_ok, have_sample;
+static uint32_t last_sample, last_sensor_retry;
 
 /* USER CODE END PV */
 
@@ -56,6 +60,7 @@ float ax, max_x=0, min_x=0, ay, max_y=0, min_y=0, az, max_z=0, min_z=0;
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
+static void MX_SPI1_Init(void);
 static void MX_SPI2_Init(void);
 /* USER CODE BEGIN PFP */
 
@@ -74,34 +79,6 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
-	 HAL_Init();
-	 SystemClock_Config();
-	 MX_GPIO_Init();
-	 MX_SPI2_Init();
-
-	 if (!LIS3DH_Init())
-	 {
-	     //ACC not detected
-	 } else
-	 {
-		 //ACC detected
-	 }
-
-	 while (1)
-	 {
-	     LIS3DH_ReadXYZ(&ax, &ay, &az);
-	     if(ax > max_x){max_x = ax;}
-	     if(ax < min_x){min_x = ax;}
-
-	     if(ay > max_y){max_y = ay;}
-	     if(ay < min_y){min_y = ay;}
-
-	     if(az > max_z){max_z = az;}
-	     if(az < min_z){min_z = az;}
-
-	     HAL_Delay(10);
-	 }
 
   /* USER CODE END 1 */
 
@@ -125,7 +102,15 @@ int main(void)
   MX_GPIO_Init();
   MX_USART2_UART_Init();
   MX_SPI2_Init();
+  MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
+
+  if (TFT_Init(&hspi1) != HAL_OK || AccDisplay_Init() != HAL_OK) {
+    Error_Handler();
+  }
+  sensor_ok = LIS3DH_Init();
+  last_sample = HAL_GetTick();
+  last_sensor_retry = last_sample;
 
   /* USER CODE END 2 */
 
@@ -136,6 +121,35 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    uint32_t now = HAL_GetTick();
+    if (!sensor_ok && (uint32_t)(now - last_sensor_retry) >= 1000U) {
+      sensor_ok = LIS3DH_Init();
+      last_sensor_retry = now;
+    }
+    if (sensor_ok && (uint32_t)(now - last_sample) >= 10U) {
+      last_sample = now;
+      sensor_ok = LIS3DH_ReadXYZ(&ax, &ay, &az);
+      if (sensor_ok) {
+        if (!have_sample) {
+          min_x = max_x = ax; min_y = max_y = ay; min_z = max_z = az;
+          have_sample = 1U;
+        }
+        if (ax > max_x) max_x = ax;
+        if (ax < min_x) min_x = ax;
+        if (ay > max_y) max_y = ay;
+        if (ay < min_y) min_y = ay;
+        if (az > max_z) max_z = az;
+        if (az < min_z) min_z = az;
+      }
+    }
+    const float current[3] = {ax, ay, az};
+    const float minimum[3] = {min_x, min_y, min_z};
+    const float maximum[3] = {max_x, max_y, max_z};
+    if (AccDisplay_Update(HAL_GetTick(), current, minimum, maximum,
+                          sensor_ok && have_sample) != HAL_OK) {
+      Error_Handler();
+    }
+    HAL_Delay(1U);
   }
   /* USER CODE END 3 */
 }
@@ -179,6 +193,26 @@ void SystemClock_Config(void)
 }
 
 /**
+  * @brief SPI1: ST7735S, mode 0, 8 MHz at PCLK2=64 MHz.
+  */
+static void MX_SPI1_Init(void)
+{
+  hspi1.Instance = SPI1;
+  hspi1.Init.Mode = SPI_MODE_MASTER;
+  hspi1.Init.Direction = SPI_DIRECTION_2LINES;
+  hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
+  hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
+  hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi1.Init.NSS = SPI_NSS_SOFT;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_8;
+  hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
+  hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
+  hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+  hspi1.Init.CRCPolynomial = 10;
+  if (HAL_SPI_Init(&hspi1) != HAL_OK) Error_Handler();
+}
+
+/**
   * @brief SPI2 Initialization Function
   * @param None
   * @retval None
@@ -201,7 +235,7 @@ static void MX_SPI2_Init(void)
   hspi2.Init.CLKPolarity = SPI_POLARITY_HIGH;
   hspi2.Init.CLKPhase = SPI_PHASE_2EDGE;
   hspi2.Init.NSS = SPI_NSS_SOFT;
-  hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
+  hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_4;
   hspi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi2.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi2.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
@@ -268,7 +302,9 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(TFT_DC_GPIO_Port, TFT_DC_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(TFT_RST_GPIO_Port, TFT_RST_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(TFT_CS_GPIO_Port, TFT_CS_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET);
@@ -279,15 +315,15 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : LD2_Pin */
-  GPIO_InitStruct.Pin = LD2_Pin;
+  /*Configure TFT control pins PA8/PA9. PA5 is now SPI1 SCK. */
+  GPIO_InitStruct.Pin = TFT_RST_Pin|TFT_DC_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PB12 */
-  GPIO_InitStruct.Pin = GPIO_PIN_12;
+  /*Configure TFT CS (PB6) and LIS3DH CS (PB12), both inactive high. */
+  GPIO_InitStruct.Pin = GPIO_PIN_12|TFT_CS_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;

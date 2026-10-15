@@ -20,7 +20,7 @@
 #define LIS3DH_CTRL_REG1_CONF	0x57		//ODR config - (100 Hz), XYZ enabled
 #define LIS3DH_CTRL_REG4_CONF	0xB8		//Config +/-16g, high resolution mode
 
-// Sensitivity for ±16g @ High-Resolution (12-bit effective: 2048 steps per +16g)
+// Sensitivity for +/-16g, high-resolution (12-bit output, 12 mg/LSB)
 #define LIS3DH_SENS_16G      0.012f // g per LSB
 
 
@@ -34,6 +34,7 @@ extern SPI_HandleTypeDef hspi2;
 uint8_t LIS3DH_ReadReg(uint8_t reg);
 void LIS3DH_WriteReg(uint8_t reg, uint8_t value);
 uint8_t LIS3DH_Init(void);
-void LIS3DH_ReadXYZ(float *ax, float *ay, float *az);
+// Returns 0 on SPI failure; outputs stay unchanged on failure.
+uint8_t LIS3DH_ReadXYZ(float *ax, float *ay, float *az);
 
 #endif /* INC_ACC_H_ */
