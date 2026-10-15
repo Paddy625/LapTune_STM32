@@ -86,13 +86,15 @@ rzeczywistym okablowaniem; dodanie TFT nie wymaga przenoszenia LIS3DH na SPI1.
    znak zależy od orientacji. Obrót płytki powinien zmieniać wartości i ekstrema.
 4. Kontroler ST7735S nie wyznacza jednoznacznie adresów widocznego obszaru.
    Domyślnie przyjęto popularny wariant green-tab: w orientacji 160×128
-   `TFT_X_OFFSET=1`, `TFT_Y_OFFSET=2`, `TFT_MADCTL=0xA8` (MY | MV | BGR).
+   `TFT_X_OFFSET=1`, `TFT_Y_OFFSET=2`, `TFT_MADCTL=0x68` (MX | MV | BGR).
+   Obraz jest obrócony o 180° względem wcześniejszego ustawienia 0xA8,
+   zgodnie z orientacją zamontowanego wyświetlacza.
    Dla części innych modułów potrzebne są oba przesunięcia równe 0.
    Ustawienia są na początku `Core/Inc/tft.h`; można też przekazać je jako `-D`
    w ustawieniach kompilatora **dla wszystkich plików**.
 5. Jeśli obraz jest ucięty/przesunięty, dobierz offsety do dokumentacji panelu.
-   Jeśli czerwony i niebieski są zamienione, zmień bit BGR, np. 0xA8 → 0xA0.
-   Obrót o 180° w poziomie: 0xA8 → 0x68. Zmiana orientacji może wymagać również
+   Jeśli czerwony i niebieski są zamienione, zmień bit BGR, np. 0x68 → 0x60.
+   Powrót do przeciwnej orientacji poziomej: 0x68 → 0xA8. Zmiana orientacji może wymagać również
    korekty offsetów. Przy odwróconych kolorach sprawdź `TFT_INVERT_COLORS=1`.
    Nie stosuj jednocześnie wszystkich tych zmian bez sprawdzenia objawu.
 
