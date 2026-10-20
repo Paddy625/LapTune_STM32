@@ -1,8 +1,11 @@
-# NUCLEO-F103RB + LIS3DH + ST7735S 160×128
+# NUCLEO-F103RB + LIS3DH + ST7735S 160×128 + GPS NEO-6M
 
 ![Schemat połączeń](wiring_st7735s.png)
 
 [Schemat wektorowy SVG](wiring_st7735s.svg).
+
+Dodano GPS NEO-6M na USART3 (PB10/PB11). Pełne połączenia, wymagania zasilania
+i opis odczytów: [GPS_NEO6M.md](GPS_NEO6M.md).
 
 Wyświetlacz pracuje poziomo, na osobnym SPI1, w trybie 0, 8 MHz.
 LIS3DH pozostaje na SPI2, w trybie 3, teraz 8 MHz zamiast wcześniejszych
@@ -117,10 +120,11 @@ Z katalogu głównego repozytorium:
 bash tests/run.sh
 ```
 
-Trzy programy testowe korzystają z atrap HAL i sanitizerów Address/Undefined:
+Sześć programów testowych korzysta z atrap HAL i sanitizerów Address/Undefined:
 komendy inicjalizacji, geometria, RGB565 i CS po błędach; układ pól, liczby,
 min/max, harmonogram i przepełnienie ticków; konfiguracja i konwersja LIS3DH
 oraz zachowanie po błędzie SPI. Nie zastępują testu na fizycznym wyświetlaczu.
+Dodatkowo sprawdzane są parser NMEA, odbiór UART i widok GPS.
 
 W przygotowanym środowisku chmurowym z `/workspace`:
 

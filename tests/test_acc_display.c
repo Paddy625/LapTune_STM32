@@ -27,7 +27,7 @@ int main(void)
     float low[] = {-16, -2, -3}, high[] = {16, 2, 3};
     assert(AccDisplay_Init() == HAL_OK && calls == 2);
     assert(AccDisplay_Update(tick, values, low, high, 1) == HAL_OK);
-    assert(strcmp(last, "X-01.235") == 0);
+    assert(strcmp(last, "X:-01.235") == 0);
     uint16_t current_right = last_x + last_width;
     uint16_t current_top = last_y, current_bottom = last_y + last_height;
     low[0] = -5; /* An in-progress frame must keep its original snapshot. */
@@ -44,7 +44,7 @@ int main(void)
     unsigned done = calls;
     assert(AccDisplay_Update(tick+99, values, low, high, 1) == HAL_OK && calls == done);
     assert(AccDisplay_Update(tick+100, values, low, high, 0) == HAL_OK);
-    assert(strcmp(last, "X---.---") == 0 && last_color == TFT_RED);
+    assert(strcmp(last, "X:---.---") == 0 && last_color == TFT_RED);
     /* Unsigned tick arithmetic across the 32-bit SysTick wrap. */
     tick = UINT32_MAX-50U;
     assert(AccDisplay_Init() == HAL_OK);

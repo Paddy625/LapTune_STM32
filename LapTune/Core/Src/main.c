@@ -24,6 +24,8 @@
 
 #include "acc.h"
 #include "acc_display.h"
+#include "gps.h"
+#include "gps_display.h"
 
 /* USER CODE END Includes */
 
@@ -47,6 +49,7 @@ SPI_HandleTypeDef hspi1;
 SPI_HandleTypeDef hspi2;
 
 UART_HandleTypeDef huart2;
+UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
 
@@ -60,6 +63,7 @@ static uint32_t last_sample, last_sensor_retry;
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
+static void MX_USART3_UART_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_SPI2_Init(void);
 /* USER CODE BEGIN PFP */
@@ -103,11 +107,13 @@ int main(void)
   MX_USART2_UART_Init();
   MX_SPI2_Init();
   MX_SPI1_Init();
+  MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
 
   if (TFT_Init(&hspi1) != HAL_OK || AccDisplay_Init() != HAL_OK) {
     Error_Handler();
   }
+  if (GPS_Init(&huart3) != HAL_OK) Error_Handler();
   sensor_ok = LIS3DH_Init();
   last_sample = HAL_GetTick();
   last_sensor_retry = last_sample;
@@ -122,6 +128,7 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     uint32_t now = HAL_GetTick();
+    GPS_Process(now);
     if (!sensor_ok && (uint32_t)(now - last_sensor_retry) >= 1000U) {
       sensor_ok = LIS3DH_Init();
       last_sensor_retry = now;
@@ -147,6 +154,9 @@ int main(void)
     const float maximum[3] = {max_x, max_y, max_z};
     if (AccDisplay_Update(HAL_GetTick(), current, minimum, maximum,
                           sensor_ok && have_sample) != HAL_OK) {
+      Error_Handler();
+    }
+    if (GPSDisplay_Update(HAL_GetTick(), GPS_GetData()) != HAL_OK) {
       Error_Handler();
     }
     HAL_Delay(1U);
@@ -284,6 +294,22 @@ static void MX_USART2_UART_Init(void)
 }
 
 /**
+  * @brief USART3: NEO-6M default NMEA, 9600 baud, 8N1.
+  */
+static void MX_USART3_UART_Init(void)
+{
+  huart3.Instance = USART3;
+  huart3.Init.BaudRate = 9600;
+  huart3.Init.WordLength = UART_WORDLENGTH_8B;
+  huart3.Init.StopBits = UART_STOPBITS_1;
+  huart3.Init.Parity = UART_PARITY_NONE;
+  huart3.Init.Mode = UART_MODE_TX_RX;
+  huart3.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart3.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart3) != HAL_OK) Error_Handler();
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -339,6 +365,16 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *uart)
+{
+  GPS_OnRxComplete(uart);
+}
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *uart)
+{
+  GPS_OnError(uart);
+}
+
 
 /* USER CODE END 4 */
 
