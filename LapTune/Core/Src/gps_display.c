@@ -61,7 +61,7 @@ HAL_StatusTypeDef GPSDisplay_Update(uint32_t now, const GPS_Data *data)
     if (len > sizeof(padded)-1U) len = sizeof(padded)-1U;
     memcpy(padded, text, len);
     HAL_StatusTypeDef status = TFT_Text(4, 72U + row*8U, padded, 1,
-                                      valid ? TFT_CYAN : TFT_GREY, TFT_BLACK);
+                                      valid ? TFT_CYAN : TFT_BLUE, TFT_BLACK);
     if (++row == 6U) pending = 0;
     return status;
 }
