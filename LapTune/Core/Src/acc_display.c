@@ -19,7 +19,7 @@ HAL_StatusTypeDef AccDisplay_Init(void)
 {
     field = 0U; pending = 0U;
     last_refresh = HAL_GetTick() - 100U;
-    if (TFT_Text(2, 0, "LAPTUNE_ALPHA", 2, TFT_RED, TFT_BLACK) != HAL_OK)
+    if (TFT_Text(4, 0, "LAPTUNE ALPHA", 2, TFT_RED, TFT_BLACK) != HAL_OK)
         return HAL_ERROR;
     return TFT_Text(4, 120, "ACC +/-16G", 1, TFT_GREY, TFT_BLACK);
 }
@@ -39,13 +39,13 @@ HAL_StatusTypeDef AccDisplay_Update(uint32_t now, const float current[3],
     }
     /* Each axis: current on the left; maximum above minimum on the right. */
     uint8_t axis = field / 3U, part = field % 3U;
-    uint16_t y = 16U + axis * 28U;
+    uint16_t y = 18U + axis * 18U;
     uint16_t x = part == 0U ? 4U : 114U;
     uint8_t scale = part == 0U ? 2U : 1U;
     if (part == 0U) {
         if (healthy) format_g(number, sizeof(number), values[axis]);
         else (void)snprintf(number, sizeof(number), "---.---");
-        (void)snprintf(text, sizeof(text), "%c%s", "XYZ"[axis], number);
+        (void)snprintf(text, sizeof(text), "%c:%s", "XYZ"[axis], number);
     } else {
         if (healthy) format_g(number, sizeof(number), part == 1U ? highs[axis] : lows[axis]);
         else (void)snprintf(number, sizeof(number), "---.---");
