@@ -20,7 +20,7 @@
 #define TFT_Y_OFFSET 0U
 #endif
 #ifndef TFT_MADCTL
-#define TFT_MADCTL 0x68U /* MX | MV | BGR; landscape rotated 180 degrees */
+#define TFT_MADCTL 0x60U /* MX | MV | RGB; landscape rotated 180 degrees */
 #endif
 #ifndef TFT_INVERT_COLORS
 #define TFT_INVERT_COLORS 0U
@@ -35,6 +35,7 @@
 #define TFT_BLACK 0x0000U
 #define TFT_WHITE 0xFFFFU
 #define TFT_CYAN  0x07FFU
+#define TFT_BLUE  0x001FU
 #define TFT_RED   0xF800U
 #define TFT_GREY  0x8410U
 
