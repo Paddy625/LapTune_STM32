@@ -63,6 +63,8 @@ rzeczywistym okablowaniem; dodanie TFT nie wymaga przenoszenia LIS3DH na SPI1.
 - `tft.c` / `tft.h`: inicjalizacja ST7735S, RGB565, prostokąty i tekst 5×7.
   Bufor jednej linii ma 320 bajtów; pełny framebuffer nie jest potrzebny.
 - `acc_display.c`: X/Y/Z w g (1 g ≈ 9,80665 m/s²), minima i maksima od startu.
+  Litera osi bezpośrednio poprzedza bieżącą wartość. Po prawej, mniejszą
+  czcionką, wyświetlane są maksimum u góry i minimum na dole, bez podpisów.
   Min/max inicjalizowane są pierwszym poprawnym pomiarem, a nie zerem.
   Czujnik ma ODR 100 Hz, zakres ±16 g, tryb HR i BDU; przelicznik 12 mg/LSB.
 - `main.c`: odczyt planowany co 10 ms, odświeżanie ekranu co 100 ms.

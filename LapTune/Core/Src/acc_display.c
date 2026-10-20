@@ -37,20 +37,20 @@ HAL_StatusTypeDef AccDisplay_Update(uint32_t now, const float current[3],
         }
         healthy = sensor_ok; field = 0U; pending = 1U;
     }
-    /* 3 fields per axis: current (large), min and max (small). */
+    /* Each axis: current on the left; maximum above minimum on the right. */
     uint8_t axis = field / 3U, part = field % 3U;
     uint16_t y = 16U + axis * 28U;
-    uint16_t x = part == 2U ? 84U : 4U;
+    uint16_t x = part == 0U ? 4U : 114U;
     uint8_t scale = part == 0U ? 2U : 1U;
     if (part == 0U) {
         if (healthy) format_g(number, sizeof(number), values[axis]);
-        else (void)snprintf(number, sizeof(number), " --.---");
-        (void)snprintf(text, sizeof(text), "%c %s", "XYZ"[axis], number);
+        else (void)snprintf(number, sizeof(number), "---.---");
+        (void)snprintf(text, sizeof(text), "%c%s", "XYZ"[axis], number);
     } else {
-        if (healthy) format_g(number, sizeof(number), part == 1U ? lows[axis] : highs[axis]);
-        else (void)snprintf(number, sizeof(number), " --.---");
-        (void)snprintf(text, sizeof(text), "%s%s", part == 1U ? "MIN" : "MAX", number);
-        y += 17U;
+        if (healthy) format_g(number, sizeof(number), part == 1U ? highs[axis] : lows[axis]);
+        else (void)snprintf(number, sizeof(number), "---.---");
+        (void)snprintf(text, sizeof(text), "%s", number);
+        if (part == 2U) y += 8U;
     }
     HAL_StatusTypeDef status = TFT_Text(x, y, text, scale,
                                       healthy ? TFT_WHITE : TFT_RED, TFT_BLACK);
