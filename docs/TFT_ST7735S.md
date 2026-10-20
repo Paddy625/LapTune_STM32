@@ -85,16 +85,20 @@ rzeczywistym okablowaniem; dodanie TFT nie wymaga przenoszenia LIS3DH na SPI1.
    Sprawdź na płasko około 1 g na osi pionowej i około 0 g na dwóch pozostałych;
    znak zależy od orientacji. Obrót płytki powinien zmieniać wartości i ekstrema.
 4. Kontroler ST7735S nie wyznacza jednoznacznie adresów widocznego obszaru.
-   Domyślnie przyjęto popularny wariant green-tab: w orientacji 160×128
-   `TFT_X_OFFSET=1`, `TFT_Y_OFFSET=2`, `TFT_MADCTL=0x68` (MX | MV | BGR).
-   Obraz jest obrócony o 180° względem wcześniejszego ustawienia 0xA8,
-   zgodnie z orientacją zamontowanego wyświetlacza.
-   Dla części innych modułów potrzebne są oba przesunięcia równe 0.
+   Domyślne ustawienia odpowiadają używanemu modułowi: w orientacji 160×128
+   `TFT_X_OFFSET=0`, `TFT_Y_OFFSET=0`, `TFT_MADCTL=0x60` (MX | MV, kolejność RGB).
+   Obraz pozostaje obrócony o 180° względem pierwotnej orientacji projektu.
+   Wcześniejsze 0x68 miało ustawiony bit BGR (0x08), przez co czerwony był
+   wyświetlany jako niebieski na tym panelu. Usunięcie tego bitu zachowuje
+   orientację i standardowe definicje RGB565, w tym `TFT_RED=0xF800`.
+   Dla części innych modułów, np. green-tab, potrzebne są przesunięcia 1 i 2.
    Ustawienia są na początku `Core/Inc/tft.h`; można też przekazać je jako `-D`
    w ustawieniach kompilatora **dla wszystkich plików**.
 5. Jeśli obraz jest ucięty/przesunięty, dobierz offsety do dokumentacji panelu.
-   Jeśli czerwony i niebieski są zamienione, zmień bit BGR, np. 0x68 → 0x60.
-   Powrót do przeciwnej orientacji poziomej: 0x68 → 0xA8. Zmiana orientacji może wymagać również
+   Jeśli na innym panelu czerwony i niebieski są zamienione, zmień bit BGR,
+   np. 0x60 → 0x68, zamiast zmieniać definicje kolorów RGB565.
+   Powrót do przeciwnej orientacji poziomej przy RGB: 0x60 → 0xA0.
+   Zmiana orientacji może wymagać również
    korekty offsetów. Przy odwróconych kolorach sprawdź `TFT_INVERT_COLORS=1`.
    Nie stosuj jednocześnie wszystkich tych zmian bez sprawdzenia objawu.
 

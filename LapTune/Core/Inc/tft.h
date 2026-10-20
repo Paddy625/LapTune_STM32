@@ -4,7 +4,7 @@
 #include "main.h"
 
 /* ST7735S, landscape RGB565. SPI1: PA5 SCK, PA7 MOSI; no MISO.
- * Defaults: 160x128 landscape module, green-tab address offsets. See docs/TFT_ST7735S.md.
+ * Defaults: 160x128 landscape module, zero offsets, RGB color order. See docs/TFT_ST7735S.md.
  * Override for the exact module; the controller has 132x162 display RAM.
  */
 #ifndef TFT_WIDTH
@@ -20,7 +20,7 @@
 #define TFT_Y_OFFSET 0U
 #endif
 #ifndef TFT_MADCTL
-#define TFT_MADCTL 0x68U /* MX | MV | BGR; landscape rotated 180 degrees */
+#define TFT_MADCTL 0x60U /* MX | MV; RGB, landscape rotated 180 degrees */
 #endif
 #ifndef TFT_INVERT_COLORS
 #define TFT_INVERT_COLORS 0U
