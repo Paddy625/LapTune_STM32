@@ -7,7 +7,9 @@ Obsługa wyświetlacza **ST7735S 160×128**: [schemat połączeń, kod i uruchom
 
 GPS **u-blox NEO-6M / GY-NEO6MV2**: [połączenia UART, pozycja, wysokość MSL i data/czas UTC](docs/GPS_NEO6M.md).
 
-Logger **microSD na SPI1 wspólnym z TFT**: [połączenia, format TXT i zatrzymanie przez B1](docs/SD_LOGGING.md).
+Logger **microSD na SPI1 wspólnym z TFT**: [połączenia i format TXT](docs/SD_LOGGING.md).
+Automatycznie zamyka plik co 3 minuty i rozpoczyna kolejny; synchronizuje dane
+co około sekundę. B1 służy do opcjonalnego zatrzymania przed wyjęciem karty.
 
 IMU parameters:
 	- Maximum acceleration +/- 16g

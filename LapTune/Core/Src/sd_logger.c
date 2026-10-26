@@ -6,9 +6,10 @@
 #define CAPACITY 128U
 static struct Record { LSM6DS3_Sample sample; LogTime time; uint32_t number; } queue[CAPACITY];
 static unsigned head,tail,count;
-static uint32_t sequence,last_sync;
+static uint32_t sequence,last_sync,file_started;
+static unsigned file_number,rotation_records;
 static volatile uint8_t stop_requested;
-static uint8_t opened;
+static uint8_t opened,rotation_pending;
 static FATFS fs;
 static FIL file;
 static char batch[1024];
@@ -28,27 +29,41 @@ static void fail(FRESULT result,LogState state)
 {
     sd_log_error=result; sd_log_state=state; stop_requested=1;
 }
-void SDLogger_Start(void)
+static void open_next_file(void)
 {
-    head=tail=count=sequence=0; sd_log_written=sd_log_dropped=0;
-    stop_requested=opened=0; sd_log_error=0; sd_log_state=LOG_OFF; sd_log_filename[0]='\0';
-    FRESULT r=f_mount(&fs,"",1);
-    if (r!=FR_OK) { fail(r,LOG_CARD_ERROR); return; }
-    unsigned n;
-    for (n=1;n<=9999;++n) {
-        (void)snprintf(sd_log_filename,sizeof(sd_log_filename),"LOG%04u.TXT",n);
-        r=f_open(&file,sd_log_filename,FA_WRITE|FA_CREATE_NEW);
+    FRESULT r=FR_DENIED;
+    char name[sizeof(sd_log_filename)];
+    while (file_number<9999U) {
+        ++file_number;
+        (void)snprintf(name,sizeof(name),"LOG%04u.TXT",file_number);
+        r=f_open(&file,name,FA_WRITE|FA_CREATE_NEW);
         if (r!=FR_EXIST) break;
     }
-    if (r!=FR_OK) { fail(r,LOG_CARD_ERROR); return; }
+    if (r!=FR_OK) { fail(r,r==FR_EXIST || r==FR_DENIED ? LOG_FULL : LOG_CARD_ERROR); return; }
     opened=1;
+    (void)strcpy(sd_log_filename,name);
     static const char header[]="NR;DATA;CZAS;ACC_X;ACC_Y;ACC_Z;GYRO_X;GYRO_Y;GYRO_Z\r\n";
     UINT wrote=0;
     r=f_write(&file,header,sizeof(header)-1,&wrote);
     if (r==FR_OK && wrote!=sizeof(header)-1) r=FR_DENIED;
     if (r==FR_OK) r=f_sync(&file);
     if (r!=FR_OK) { fail(r,r==FR_DENIED ? LOG_FULL : LOG_CARD_ERROR); return; }
-    last_sync=HAL_GetTick(); sd_log_state=LOG_RECORDING;
+    file_started=last_sync=HAL_GetTick();
+}
+static void close_file(void)
+{
+    FRESULT r=f_close(&file); opened=0;
+    if (r!=FR_OK) fail(r,LOG_CARD_ERROR);
+}
+void SDLogger_Start(void)
+{
+    head=tail=count=sequence=0; sd_log_written=sd_log_dropped=0;
+    file_number=rotation_records=0; rotation_pending=0;
+    stop_requested=opened=0; sd_log_error=0; sd_log_state=LOG_OFF; sd_log_filename[0]='\0';
+    FRESULT r=f_mount(&fs,"",1);
+    if (r!=FR_OK) { fail(r,LOG_CARD_ERROR); return; }
+    open_next_file();
+    if (sd_log_state==LOG_OFF && opened) sd_log_state=LOG_RECORDING;
 }
 void SDLogger_RequestStop(void) { stop_requested=1; }
 void SDLogger_DataLoss(void)
@@ -85,29 +100,46 @@ static unsigned format(char out[192],const struct Record *r)
 }
 void SDLogger_Process(uint32_t now)
 {
-    if (sd_log_state==LOG_RECORDING && count) {
+    if (stop_requested) rotation_pending=0;
+    if (sd_log_state==LOG_RECORDING && !stop_requested && !rotation_pending &&
+        (uint32_t)(now-file_started)>=SD_LOG_FILE_DURATION_MS) {
+        /* Snapshot the boundary. Samples arriving during I/O belong to the next file. */
+        rotation_pending=1; rotation_records=count;
+    }
+    if (sd_log_state==LOG_RECORDING && count && (!rotation_pending || rotation_records)) {
         unsigned bytes=0,records=0,available=count;
+        if (rotation_pending) available=rotation_records;
         while (records<available) {
             char line[192]; unsigned len=format(line,&queue[(tail+records)%CAPACITY]);
             if (len>=sizeof(line)) { fail(FR_INT_ERR,LOG_CARD_ERROR); break; }
             if (len>sizeof(batch)-bytes) break;
             memcpy(batch+bytes,line,len); bytes+=len; ++records;
         }
-        if (sd_log_state!=LOG_RECORDING) return;
-        UINT wrote=0;
-        FRESULT r=f_write(&file,batch,bytes,&wrote);
-        if (r!=FR_OK || wrote!=bytes) { fail(r==FR_OK ? FR_DENIED : r,r==FR_OK ? LOG_FULL : LOG_CARD_ERROR); }
-        else {
-            tail=(tail+records)%CAPACITY; count-=records; sd_log_written+=records;
+        if (sd_log_state==LOG_RECORDING) {
+            UINT wrote=0;
+            FRESULT r=f_write(&file,batch,bytes,&wrote);
+            if (r!=FR_OK || wrote!=bytes) { fail(r==FR_OK ? FR_DENIED : r,r==FR_OK ? LOG_FULL : LOG_CARD_ERROR); }
+            else {
+                tail=(tail+records)%CAPACITY; count-=records; sd_log_written+=records;
+                if (rotation_pending) rotation_records-=records;
+            }
         }
     }
-    if (sd_log_state==LOG_RECORDING && (uint32_t)(now-last_sync)>=1000U) {
-        FRESULT r=f_sync(&file); last_sync=now;
+    if (sd_log_state==LOG_RECORDING && rotation_pending && !rotation_records && !stop_requested) {
+        close_file(); rotation_pending=0;
+        /* Keep accepting into RAM while close/open performs SD I/O. A stop arriving
+           here still needs a new file if any samples are already queued. */
+        if (sd_log_state==LOG_RECORDING) {
+            if (stop_requested && !count) sd_log_state=LOG_STOPPED;
+            else open_next_file();
+        }
+    }
+    if (sd_log_state==LOG_RECORDING && (uint32_t)(HAL_GetTick()-last_sync)>=SD_LOG_SYNC_INTERVAL_MS) {
+        FRESULT r=f_sync(&file); last_sync=HAL_GetTick();
         if (r!=FR_OK) fail(r,LOG_CARD_ERROR);
     }
     if (opened && (sd_log_state!=LOG_RECORDING || (stop_requested && count==0))) {
-        FRESULT r=f_close(&file); opened=0;
-        if (r!=FR_OK) fail(r,LOG_CARD_ERROR);
-        else if (sd_log_state==LOG_RECORDING) sd_log_state=LOG_STOPPED;
+        close_file();
+        if (sd_log_state==LOG_RECORDING) sd_log_state=LOG_STOPPED;
     }
 }

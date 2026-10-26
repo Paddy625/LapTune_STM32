@@ -29,6 +29,7 @@
 #include "sd_spi.h"
 #include "sd_logger.h"
 #include <stdio.h>
+#include <string.h>
 
 /* USER CODE END Includes */
 
@@ -126,7 +127,8 @@ void SD_SPI_Service(void) { ServiceAcquisition(); }
 static HAL_StatusTypeDef ShowLogState(void)
 {
   static int previous=-1;
-  if ((int)sd_log_state==previous) return HAL_OK;
+  static char previous_filename[sizeof(sd_log_filename)];
+  if ((int)sd_log_state==previous && !strcmp(previous_filename,sd_log_filename)) return HAL_OK;
   char text[32];
   const char *label="SD OFF";
   switch (sd_log_state) {
@@ -138,8 +140,12 @@ static HAL_StatusTypeDef ShowLogState(void)
   default: break;
   }
   (void)snprintf(text,sizeof(text),"%-12s%-12s",label,sd_log_filename);
-  previous=(int)sd_log_state;
-  return TFT_Text(4,120,text,1,sd_log_state==LOG_RECORDING || sd_log_state==LOG_STOPPED ? TFT_WHITE : TFT_RED,TFT_BLACK);
+  HAL_StatusTypeDef result=TFT_Text(4,120,text,1,sd_log_state==LOG_RECORDING || sd_log_state==LOG_STOPPED ? TFT_WHITE : TFT_RED,TFT_BLACK);
+  if (result==HAL_OK) {
+    previous=(int)sd_log_state;
+    (void)strcpy(previous_filename,sd_log_filename);
+  }
+  return result;
 }
 
 

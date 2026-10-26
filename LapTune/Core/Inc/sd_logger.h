@@ -2,6 +2,9 @@
 #define LAPTUNE_SD_LOGGER_H
 #include "acc.h"
 #include "log_clock.h"
+/* Elapsed STM32 time, independent of GPS reception and UTC corrections. */
+#define SD_LOG_FILE_DURATION_MS 180000U
+#define SD_LOG_SYNC_INTERVAL_MS 1000U
 typedef enum { LOG_OFF,LOG_RECORDING,LOG_STOPPED,LOG_CARD_ERROR,LOG_FULL,LOG_DATA_LOSS } LogState;
 extern volatile LogState sd_log_state;
 extern volatile uint32_t sd_log_written, sd_log_dropped;

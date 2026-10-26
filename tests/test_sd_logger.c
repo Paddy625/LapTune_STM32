@@ -9,6 +9,8 @@
 static unsigned char *image;
 static uint32_t tick;
 static int no_card,write_error,inject;
+static unsigned sync_calls;
+static void (*on_sync)(void);
 uint32_t HAL_GetTick(void) { return tick; }
 DSTATUS disk_initialize(BYTE p) { return p || no_card ? STA_NOINIT : 0; }
 DSTATUS disk_status(BYTE p) { return disk_initialize(p); }
@@ -29,12 +31,122 @@ DRESULT disk_write(BYTE p,const BYTE *in,LBA_t at,UINT n)
 DRESULT disk_ioctl(BYTE p,BYTE cmd,void *out)
 {
     assert(!p);
-    if (cmd==CTRL_SYNC) return write_error ? RES_ERROR : RES_OK;
+    if (cmd==CTRL_SYNC) {
+        ++sync_calls;
+        if (on_sync) { void (*action)(void)=on_sync; on_sync=NULL; action(); }
+        return write_error ? RES_ERROR : RES_OK;
+    }
     if (cmd==GET_SECTOR_COUNT) *(LBA_t*)out=SECTORS;
     else if (cmd==GET_BLOCK_SIZE) *(DWORD*)out=1;
     else if (cmd==GET_SECTOR_SIZE) *(WORD*)out=512;
     else return RES_PARERR;
     return RES_OK;
+}
+static void fresh_card(uint32_t start)
+{
+    no_card=write_error=inject=0; sync_calls=0; on_sync=NULL; tick=start;
+    assert(f_mount(NULL,"",0)==FR_OK);
+    memset(image,0,SECTORS*512U);
+    MKFS_PARM options={.fmt=FM_FAT|FM_SFD,.n_fat=1,.align=1,.n_root=512,.au_size=512};
+    unsigned char work[4096]; assert(f_mkfs("",&options,work,sizeof(work))==FR_OK);
+}
+static char *read_log(const char *name,unsigned rows)
+{
+    FIL f; UINT done;
+    assert(f_open(&f,name,FA_READ)==FR_OK);
+    UINT bytes=(UINT)f_size(&f);
+    char *text=calloc(bytes+1U,1); assert(text);
+    assert(f_read(&f,text,bytes,&done)==FR_OK && done==bytes);
+    assert(f_close(&f)==FR_OK);
+    unsigned lines=0;
+    for (char *p=text;*p;) {
+        char *end=strstr(p,"\r\n"); assert(end);
+        unsigned columns=0;
+        for (char *q=p;q<end;++q) if (*q==';') ++columns;
+        assert(columns==8); ++lines; p=end+2;
+    }
+    assert(lines==rows+1U);
+    return text;
+}
+static void test_automatic_rotation(void)
+{
+    fresh_card(5000); SDLogger_Start();
+    assert(sd_log_state==LOG_RECORDING && !strcmp(sd_log_filename,"LOG0001.TXT"));
+    LSM6DS3_Sample s={1,2,3,4,5,6}; LogTime t={0};
+    for (unsigned n=0;n<100;++n) SDLogger_Append(&s,t);
+    tick+=SD_LOG_FILE_DURATION_MS-1U; SDLogger_Process(tick);
+    assert(!strcmp(sd_log_filename,"LOG0001.TXT"));
+    /* The boundary spans multiple writes; a callback enqueues into the next file. */
+    inject=1; ++tick;
+    for (unsigned n=0;n<100 && !strcmp(sd_log_filename,"LOG0001.TXT");++n) SDLogger_Process(tick);
+    assert(sd_log_state==LOG_RECORDING && !strcmp(sd_log_filename,"LOG0002.TXT"));
+    assert(sd_log_written==100 && !sd_log_dropped);
+    char *first=read_log("LOG0001.TXT",100);
+    assert(strstr(first,"100;;;1.000000;2.000000;3.000000;4.000;5.000;6.000\r\n"));
+    assert(!strstr(first,"101;;;"));
+    uint32_t second_start=tick;
+    SDLogger_Process(tick); assert(sd_log_written==101);
+    tick+=SD_LOG_SYNC_INTERVAL_MS; SDLogger_Process(tick);
+    char *second=read_log("LOG0002.TXT",1); assert(strstr(second,"101;;;")); free(second);
+    tick=second_start+SD_LOG_FILE_DURATION_MS-1U; SDLogger_Process(tick);
+    assert(!strcmp(sd_log_filename,"LOG0002.TXT"));
+    ++tick; SDLogger_Process(tick); /* Even an empty queue rotates on time, without B1. */
+    assert(sd_log_state==LOG_RECORDING && !strcmp(sd_log_filename,"LOG0003.TXT"));
+    char *preserved=read_log("LOG0001.TXT",100); assert(!strcmp(first,preserved));
+    free(first); free(preserved);
+    SDLogger_RequestStop(); SDLogger_Process(tick); assert(sd_log_state==LOG_STOPPED);
+}
+static void append_and_stop(void)
+{
+    LSM6DS3_Sample s={1,2,3,4,5,6}; LogTime t={0};
+    SDLogger_Append(&s,t); SDLogger_RequestStop();
+}
+static void test_stop_and_tick_wrap(void)
+{
+    fresh_card(UINT32_MAX-50000U); SDLogger_Start();
+    LSM6DS3_Sample s={1,2,3,4,5,6}; LogTime t={0};
+    tick+=SD_LOG_FILE_DURATION_MS-1U; SDLogger_Process(tick);
+    assert(!strcmp(sd_log_filename,"LOG0001.TXT"));
+    ++tick; SDLogger_Append(&s,t); on_sync=append_and_stop; SDLogger_Process(tick);
+    /* Stop during close must preserve a sample that was already queued for file 2. */
+    assert(sd_log_state==LOG_RECORDING && !strcmp(sd_log_filename,"LOG0002.TXT"));
+    SDLogger_Process(tick); assert(sd_log_state==LOG_STOPPED && sd_log_written==2);
+    char *text=read_log("LOG0001.TXT",1); assert(strstr(text,"1;;;")); free(text);
+    text=read_log("LOG0002.TXT",1); assert(strstr(text,"2;;;")); free(text);
+
+    fresh_card(0); SDLogger_Start();
+    for (unsigned n=0;n<100;++n) SDLogger_Append(&s,t);
+    tick=SD_LOG_FILE_DURATION_MS; SDLogger_Process(tick); SDLogger_RequestStop();
+    for (unsigned n=0;n<100 && sd_log_state==LOG_RECORDING;++n) SDLogger_Process(tick);
+    assert(sd_log_state==LOG_STOPPED && sd_log_written==100);
+    assert(!strcmp(sd_log_filename,"LOG0001.TXT")); /* Stop cancels a pending rotation. */
+    free(read_log("LOG0001.TXT",100));
+}
+static void remove_card(void) { no_card=1; }
+static void test_rotation_error(void)
+{
+    fresh_card(0); SDLogger_Start();
+    LSM6DS3_Sample s={1,2,3,4,5,6}; LogTime t={0}; SDLogger_Append(&s,t);
+    tick=SD_LOG_FILE_DURATION_MS; on_sync=remove_card; SDLogger_Process(tick);
+    assert(sd_log_state==LOG_CARD_ERROR && sd_log_written==1);
+    assert(!strcmp(sd_log_filename,"LOG0001.TXT"));
+    no_card=0; free(read_log("LOG0001.TXT",1));
+}
+static void test_sync_and_restart(void)
+{
+    fresh_card(0); SDLogger_Start();
+    LSM6DS3_Sample s={1,2,3,4,5,6}; LogTime t={0}; SDLogger_Append(&s,t);
+    unsigned before=sync_calls; SDLogger_Process(tick);
+    tick=SD_LOG_SYNC_INTERVAL_MS-1U; SDLogger_Process(tick); assert(sync_calls==before);
+    ++tick; SDLogger_Process(tick); assert(sync_calls==before+1U);
+    SDLogger_Append(&s,t); ++tick; SDLogger_Process(tick);
+    /* Simulate losing the RAM cache: unmount without f_close, then reboot/mount.
+       This checks FatFs metadata persistence, not electrical power-fail behaviour. */
+    assert(f_mount(NULL,"",0)==FR_OK); SDLogger_Start();
+    assert(sd_log_state==LOG_RECORDING && !strcmp(sd_log_filename,"LOG0002.TXT"));
+    char *text=read_log("LOG0001.TXT",1);
+    assert(strstr(text,"1;;;") && !strstr(text,"2;;;")); free(text);
+    SDLogger_RequestStop(); SDLogger_Process(tick); assert(sd_log_state==LOG_STOPPED);
 }
 int main(void)
 {
@@ -83,6 +195,8 @@ int main(void)
     assert(f_lseek(&f,(FSIZE_t)free_clusters*volume->csize*512U)==FR_OK);
     assert(f_close(&f)==FR_OK);
     SDLogger_Start(); assert(sd_log_state==LOG_FULL); SDLogger_Process(tick);
-    free(text); free(image);
-    puts("PASS SD logger/FatFs: real FAT image, 9 columns, UTC/units, unique files, concurrent enqueue, close, overflow and I/O errors");
+    free(text);
+    test_automatic_rotation(); test_stop_and_tick_wrap(); test_rotation_error(); test_sync_and_restart();
+    free(image);
+    puts("PASS SD logger/FatFs: FAT files, UTC/units, 3-minute rotation, continuous numbering, concurrent enqueue/stop, tick wrap, sync/restart, full card and I/O errors");
 }
