@@ -7,10 +7,10 @@
 #define CAPACITY 128U
 static struct Record { LSM6DS3_Sample sample; LogTime time; uint32_t number; } queue[CAPACITY];
 static unsigned head,tail,count;
-static uint32_t sequence,last_sync,file_started;
+static uint32_t sequence,last_sync,file_started,last_attempt,last_button;
 static unsigned file_number,rotation_records;
-static volatile uint8_t stop_requested;
-static uint8_t opened,rotation_pending;
+static volatile uint8_t stop_requested,resume_requested,automatic_enabled;
+static uint8_t opened,rotation_pending,recovery_pending,acquisition_fault,have_button;
 static FATFS fs;
 static FIL file;
 static char batch[1024];
@@ -29,8 +29,9 @@ DWORD get_fattime(void)
 static void fail(FRESULT result,LogState state)
 {
     /* A failed best-effort close must not hide the original I/O/init failure. */
-    if (sd_log_state<LOG_CARD_ERROR) { sd_log_error=result; sd_log_state=state; }
-    stop_requested=1;
+    if (sd_log_state<LOG_CARD_ERROR) {
+        sd_log_error=result; sd_log_state=state; recovery_pending=1;
+    }
 }
 void SDLogger_StatusText(char text[26])
 {
@@ -38,9 +39,10 @@ void SDLogger_StatusText(char text[26])
     switch (sd_log_state) {
     case LOG_RECORDING: label="SD REC"; break;
     case LOG_STOPPED: label="SD SAVED"; break;
-    case LOG_FULL: label="SD FULL"; break;
-    case LOG_DATA_LOSS: label="SD DATA LOSS"; break;
+    case LOG_FULL: label=automatic_enabled ? "SD FULL" : "PAUSE FULL"; break;
+    case LOG_DATA_LOSS: label=automatic_enabled ? "SD DATA LOSS" : "PAUSE LOSS"; break;
     case LOG_CARD_ERROR: {
+        const char *prefix=automatic_enabled ? "SD" : "PAUSE";
         const char *reason="FILESYSTEM";
         switch (sd_log_error) {
         case FR_NO_FILESYSTEM: reason="FAT16/32"; break;
@@ -51,16 +53,23 @@ void SDLogger_StatusText(char text[26])
         case FR_INT_ERR: reason="INTERNAL"; break;
         default: break;
         }
-        if (sd_spi_diag.error!=SD_SPI_OK)
-            (void)snprintf(text,26,"SD E%02u %s %02u:%02X",sd_log_error,SD_SPI_ErrorName(),
+        if (sd_spi_diag.error==SD_SPI_OCR && sd_spi_diag.ocr_valid)
+            (void)snprintf(text,26,"%s E%02u OCR %08lX",prefix,sd_log_error,(unsigned long)sd_spi_diag.ocr);
+        else if (sd_spi_diag.error!=SD_SPI_OK)
+            (void)snprintf(text,26,"%s E%02u %s %02u:%02X",prefix,sd_log_error,SD_SPI_ErrorName(),
                            sd_spi_diag.command,sd_spi_diag.response);
-        else (void)snprintf(text,26,"SD E%02u %s",sd_log_error,reason);
+        else (void)snprintf(text,26,"%s E%02u %s",prefix,sd_log_error,reason);
         size_t len=strlen(text); memset(text+len,' ',25U-len); text[25]='\0';
         return;
     }
     default: break;
     }
     (void)snprintf(text,26,"%-12s%-12s ",label,sd_log_filename);
+}
+static uint8_t failed(void) { return sd_log_state>=LOG_CARD_ERROR; }
+static void discard_queue(void)
+{
+    sd_log_dropped+=count; head=tail=count=0; rotation_pending=0; rotation_records=0;
 }
 static void open_next_file(void)
 {
@@ -88,25 +97,55 @@ static void close_file(void)
     FRESULT r=f_close(&file); opened=0;
     if (r!=FR_OK) fail(r,LOG_CARD_ERROR);
 }
-void SDLogger_Start(void)
+static void cleanup_failure(void)
 {
-    head=tail=count=sequence=0; sd_log_written=sd_log_dropped=0;
-    file_number=rotation_records=0; rotation_pending=0;
-    stop_requested=opened=0; sd_log_error=0; sd_log_state=LOG_OFF; sd_log_filename[0]='\0';
+    if (!recovery_pending) return;
+    /* After a card I/O failure, abandon the old FIL/cache before any remount.
+       Never replay its FAT writes onto a newly inserted, possibly different card. */
+    if (opened && sd_log_state!=LOG_CARD_ERROR) close_file();
+    opened=0; discard_queue();
+    (void)f_mount(NULL,"",0);
+    memset(&file,0,sizeof(file)); recovery_pending=0; last_attempt=HAL_GetTick();
+}
+static void connect_card(void)
+{
+    (void)f_mount(NULL,"",0);
+    file_number=0; sd_log_error=0; sd_log_state=LOG_OFF; sd_log_filename[0]='\0';
     FRESULT r=f_mount(&fs,"",1);
     if (r!=FR_OK) { fail(r,LOG_CARD_ERROR); return; }
+    DWORD free_clusters; FATFS *volume;
+    r=f_getfree("",&free_clusters,&volume);
+    if (r!=FR_OK) { fail(r,LOG_CARD_ERROR); return; }
+    /* Do not create an empty file on each retry while the same card is full. */
+    if (!free_clusters) { fail(FR_DENIED,LOG_FULL); return; }
     open_next_file();
     if (sd_log_state==LOG_OFF && opened) sd_log_state=LOG_RECORDING;
 }
-void SDLogger_RequestStop(void) { stop_requested=1; }
+void SDLogger_Start(void)
+{
+    head=tail=count=sequence=0; sd_log_written=sd_log_dropped=0;
+    rotation_records=0; rotation_pending=recovery_pending=acquisition_fault=have_button=0;
+    stop_requested=resume_requested=opened=0; automatic_enabled=1;
+    connect_card(); if (failed()) cleanup_failure();
+}
+void SDLogger_RequestStop(void) { automatic_enabled=0; resume_requested=0; stop_requested=1; }
+void SDLogger_RequestResume(void) { automatic_enabled=1; resume_requested=1; }
+void SDLogger_Button(void)
+{
+    uint32_t now=HAL_GetTick();
+    if (have_button && (uint32_t)(now-last_button)<200U) return;
+    have_button=1; last_button=now;
+    if (automatic_enabled) SDLogger_RequestStop(); else SDLogger_RequestResume();
+}
 void SDLogger_DataLoss(void)
 {
+    acquisition_fault=1;
     if (sd_log_state==LOG_RECORDING) { ++sd_log_dropped; fail(FR_INT_ERR,LOG_DATA_LOSS); }
 }
 void SDLogger_Append(const LSM6DS3_Sample *sample,LogTime time)
 {
-    if (sd_log_state!=LOG_RECORDING || stop_requested) return;
-    ++sequence;
+    ++sequence; acquisition_fault=0;
+    if (sd_log_state!=LOG_RECORDING || stop_requested || !automatic_enabled) { ++sd_log_dropped; return; }
     if (count==CAPACITY) { ++sd_log_dropped; fail(FR_INT_ERR,LOG_DATA_LOSS); return; }
     queue[head].sample=*sample; queue[head].time=time; queue[head].number=sequence;
     head=(head+1U)%CAPACITY; ++count;
@@ -133,6 +172,18 @@ static unsigned format(char out[192],const struct Record *r)
 }
 void SDLogger_Process(uint32_t now)
 {
+    if (!automatic_enabled) stop_requested=1;
+    if (failed()) { cleanup_failure(); now=HAL_GetTick(); }
+    if (!opened && automatic_enabled &&
+        (resume_requested || (failed() && (uint32_t)(now-last_attempt)>=SD_LOG_RETRY_INTERVAL_MS)) &&
+        (sd_log_state!=LOG_DATA_LOSS || !acquisition_fault)) {
+        resume_requested=0; stop_requested=0;
+        /* B1 may interrupt between the retry condition and clearing the flags. */
+        if (!automatic_enabled) { stop_requested=1; return; }
+        connect_card();
+        if (failed()) cleanup_failure();
+        return;
+    }
     if (stop_requested) rotation_pending=0;
     if (sd_log_state==LOG_RECORDING && !stop_requested && !rotation_pending &&
         (uint32_t)(now-file_started)>=SD_LOG_FILE_DURATION_MS) {
@@ -171,8 +222,9 @@ void SDLogger_Process(uint32_t now)
         FRESULT r=f_sync(&file); last_sync=HAL_GetTick();
         if (r!=FR_OK) fail(r,LOG_CARD_ERROR);
     }
-    if (opened && (sd_log_state!=LOG_RECORDING || (stop_requested && count==0))) {
+    if (opened && sd_log_state==LOG_RECORDING && stop_requested && count==0) {
         close_file();
         if (sd_log_state==LOG_RECORDING) sd_log_state=LOG_STOPPED;
     }
+    if (failed()) cleanup_failure();
 }

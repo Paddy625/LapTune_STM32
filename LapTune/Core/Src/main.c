@@ -428,8 +428,8 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 void HAL_GPIO_EXTI_Callback(uint16_t pin)
 {
-  /* The Nucleo B1 release edge requests a foreground flush/close, even during SD I/O. */
-  if (pin==B1_Pin) SDLogger_RequestStop();
+  /* Debounced B1 release requests foreground stop/resume; no FatFs in IRQ. */
+  if (pin==B1_Pin) SDLogger_Button();
 }
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *uart)

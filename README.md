@@ -9,7 +9,9 @@ GPS **u-blox NEO-6M / GY-NEO6MV2**: [połączenia UART, pozycja, wysokość MSL 
 
 Logger **microSD na SPI1 wspólnym z TFT**: [połączenia i format TXT](docs/SD_LOGGING.md).
 Automatycznie zamyka plik co 3 minuty i rozpoczyna kolejny; synchronizuje dane
-co około sekundę. B1 służy do opcjonalnego zatrzymania przed wyjęciem karty.
+co około sekundę. Po błędzie ponawia montowanie co 2 sekundy i wznawia zapis
+w nowym pliku. B1 zatrzymuje zapis przed wyjęciem karty; kolejne naciśnięcie
+wznawia go bez resetowania płytki.
 
 IMU parameters:
 	- Maximum acceleration +/- 16g

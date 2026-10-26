@@ -46,6 +46,12 @@ Odpowiedź `00` sama nie dowodzi, że karta jest starszą SD. Błąd CRC polecen
 brak odpowiedzi, niepoprawne R7 lub sprzeczne OCR/CSD nadal przerywają start.
 MMC nie jest obsługiwane.
 
+Po zakończeniu ACMD41 sterownik czeka do około sekundy na ustawienie bitu
+gotowości w OCR, ponawiając CMD58. Nadal wymaga obsługi zakresu napięcia
+3,2–3,4 V, zgodności adresowania z rozpoznanym typem SD oraz poprawnego CSD.
+Nie akceptuje OCR z samymi jedynkami. Pełna wartość OCR jest zachowywana
+do diagnostyki zamiast wyświetlania samej odpowiedzi R1 `00`.
+
 Reset CMD0 jest ponawiany przez maksymalnie około sekundę. Dla starszych kart
 odrzucenie CMD59 jako nieobsługiwanego polecenia nie przerywa inicjalizacji.
 Sterownik nadal sprawdza CRC16 odczytanych danych i wysyła poprawne CRC przy
@@ -57,10 +63,16 @@ Zapis rozpoczyna się automatycznie po uruchomieniu. Co **3 minuty** logger
 dopisuje bufor do bieżącego pliku, zamyka go i automatycznie otwiera kolejny.
 Nie wymaga to naciśnięcia B1. Powstają pliki od `LOG0001.TXT` do `LOG9999.TXT`,
 zawsze z pominięciem istniejących nazw, bez nadpisywania wcześniejszych danych.
-Po wyczerpaniu miejsca lub dostępnych nazw zapis zatrzymuje się jako `SD FULL`.
+Po wyczerpaniu miejsca lub dostępnych nazw pojawia się `SD FULL`; logger
+okresowo ponawia montowanie, np. po wymianie karty na inną. Sprawdza wolne
+klastry przed utworzeniem pliku, więc pełna karta nie otrzymuje nowego pustego
+pliku przy każdej próbie.
 
-Numeracja próbek zaczyna się od 1 po uruchomieniu i **jest ciągła między
-plikami tej samej sesji**. Każdy plik ma własny nagłówek:
+NR liczy poprawnie odczytane próbki od uruchomienia i **nie zeruje się przy
+zmianie pliku, ponownym montowaniu ani wznowieniu przez B1**. Próbki odebrane
+w czasie inicjalizacji, braku karty lub ręcznej pauzy także zwiększają licznik,
+ale nie trafiają do pliku. Luki w NR pokazują więc przerwę w zapisie;
+pierwszy zapisany wiersz może mieć numer większy od 1. Każdy plik ma nagłówek:
 
 ```text
 NR;DATA;CZAS;ACC_X;ACC_Y;ACC_Z;GYRO_X;GYRO_Y;GYRO_Z
@@ -115,30 +127,56 @@ Czasy można zmienić w `LapTune/Core/Inc/sd_logger.h`:
 ```c
 #define SD_LOG_FILE_DURATION_MS 180000U  /* 3 minuty */
 #define SD_LOG_SYNC_INTERVAL_MS 1000U    /* około 1 sekundy */
+#define SD_LOG_RETRY_INTERVAL_MS 2000U   /* odstęp między próbami po błędzie */
 ```
 
 Nie ma gwarancji zapisu przy dowolnie długim zablokowaniu/uszkodzeniu karty.
 Przepełnienie FIFO/RAM, utrata wyrównania danych, błąd SPI IMU lub brak próbek
-przez sekundę zatrzymują logowanie ze statusem `SD DATA LOSS`. Nie kontynuujemy
-pozornie kompletnego pliku po wykrytej utracie danych. Przy błędzie zapisu
-ostatni wiersz pliku może być niepełny.
+przez sekundę przerywają bieżący plik ze statusem `SD DATA LOSS`. Nowy plik
+może zostać otwarty po odstępie ponawiania; po awarii IMU logger czeka także
+na powrót poprawnych odczytów. Przy błędzie zapisu ostatni wiersz może być
+niepełny. Po odzyskaniu dostępu zapis jest kontynuowany w nowym pliku.
+
+## Ponawianie i wymiana karty
+
+Po błędzie inicjalizacji, odczytu/zapisu lub zapełnieniu karty próba montowania
+jest ponawiana **co 2 sekundy od zakończenia poprzedniej próby/obsługi błędu**.
+Dotyczy to też startu bez karty oraz wyjęcia karty w trakcie zapisu. Po włożeniu
+sprawnej karty FAT16/FAT32 logger automatycznie zakłada nowy plik i wraca do
+`SD REC`, bez resetowania Nucleo. Nie formatuje ani nie nadpisuje istniejących
+plików. Samo wykrycie błędu i próba inicjalizacji mają własne ograniczone
+czasy oczekiwania; nie jest to sprzętowe wykrywanie włożenia w ciągu 2 sekund.
+TFT może chwilowo zwolnić podczas próby, a callback nadal obsługuje IMU/GPS.
+
+Po błędzie karty uchwyt pliku i cache FAT są porzucane przed ponownym montowaniem.
+Stare rekordy z kolejki nie są odtwarzane na ponownie włożonej karcie: nie
+wiadomo, ile bajtów poprzedniej operacji zostało faktycznie zapisanych ani
+czy włożono tę samą kartę. Pomiary z okresu niedostępności karty są pomijane;
+RAM nie przechowuje całej sesji. NR i liczniki nie są zerowane przy wznowieniu.
+
+Ręczne zatrzymanie przez B1 **wyłącza ponawianie**, aby karta pozostawała
+zamknięta do bezpiecznego wyjęcia. Po wymianie karty naciśnij i puść B1
+ponownie, aby wznowić zapis w nowym pliku bez resetu. Obsługa B1 odrzuca
+powtórne zbocza w ciągu 200 ms i nie wykonuje operacji FatFs w przerwaniu.
 
 ## Obsługa na płytce
 
-1. Włóż przygotowaną kartę przed włączeniem/resetem Nucleo.
+1. Włóż przygotowaną kartę. Jeśli Nucleo już pracuje, logger podejmie kolejną
+   próbę automatycznie, o ile nie został zatrzymany przez B1.
 2. Po utworzeniu pliku w stopce pojawi się `SD REC LOGxxxx.TXT`.
 3. Co 3 minuty bieżący plik jest zamykany i powstaje kolejny; stopka pokazuje
    jego nową nazwę. Zapis trwa automatycznie przez całą sesję.
 4. Jeśli chcesz wyjąć kartę podczas pracy, **naciśnij i puść B1**. Przerwanie
    przycisku tylko zgłasza żądanie; główna pętla dopisuje kolejkę i zamyka plik.
    Wyjmuj kartę po pojawieniu się **`SD SAVED`**. Pomiary i ekran nadal działają.
-5. Po zatrzymaniu przez B1 nową sesję rozpocznij przez reset Nucleo z włożoną kartą.
+5. Po zatrzymaniu przez B1 naciśnij i puść go ponownie, aby wznowić zapis.
 
 Zamiast ogólnego `SD ERROR` stopka pokazuje teraz **`SD E…` z przyczyną**.
 `SD FULL` oznacza brak miejsca. `SD DATA LOSS` oznacza problem z ciągłością
 danych. Te statusy nie oznaczają bezpiecznie zamkniętej, kompletnej sesji.
-Bez karty IMU/GPS i wyświetlacz nadal pracują, lecz nie ma automatycznego
-ponawiania montowania włożonej później karty — należy zresetować urządzenie.
+Bez karty IMU/GPS nadal pracują i wykonywane są kolejne próby montowania.
+`PAUSE E…`, `PAUSE FULL` lub `PAUSE LOSS` oznacza ręczne wstrzymanie ponawiania
+przez B1 po błędzie; nie potwierdza poprawnego zapisania poprzedniego pliku.
 
 Zapis danych nie wymaga pamiętania o B1: wcześniejsze, 3-minutowe pliki są już
 zamknięte, a bieżący plik jest dodatkowo synchronizowany co około sekundę.
@@ -159,21 +197,26 @@ Przykład `SD E03 CMD0 00:FF` zawiera kod FatFs (`03`), etap/błąd sterownika
 R1 w zapisie szesnastkowym (`FF`). `FF` oznacza brak poprawnej odpowiedzi R1.
 Nie identyfikuje sam w sobie konkretnego uszkodzonego przewodu ani przyczyny
 elektrycznej. Gdy komunikacja działa, lecz FatFs nie rozpoznaje woluminu,
-pokazywane jest np. `SD E13 FAT16/32`, bez dodatkowych pól SPI.
+pokazywane jest np. `SD E13 FAT16/32`, bez dodatkowych pól SPI. Gdy CMD58
+zostało przyjęte, lecz kontrola OCR zawiodła, komunikat ma postać
+**`SD E03 OCR 00FF8000`**: osiem cyfr oznacza całe cztery bajty rejestru,
+a nie numer polecenia i R1. Tę pełną wartość należy zanotować do diagnostyki.
 
 | Przykład / oznaczenie | Znaczenie |
 | --- | --- |
 | `SD E03 CMD0 00:FF` | Karta nie odpowiedziała poprawnie na reset / wejście w tryb SPI |
 | `SD E03 CMD8 08:00` | Nietypowa odpowiedź na rozpoznanie wersji karty przed odczytem FAT; aktualny kod ponawia rozpoznanie i weryfikuje tryb starszej SD |
 | `SD E03 ACMD41 41:01` | Karta pozostała w stanie inicjalizacji do upływu limitu czasu |
+| `SD E03 OCR 00FF8000` | Przykład OCR bez ustawionego bitu gotowości 31 po upływie limitu |
+| `SD E03 OCR 80000000` | Przykład OCR bez deklaracji obsługi napięcia 3,3 V |
+| `SD E03 OCR C0FF8000` | Gdy CMD8 nie potwierdziło SD v2: OCR deklaruje sprzeczne adresowanie blokowe |
 | `SD E13 FAT16/32` | SPI zainicjalizowane, ale brak rozpoznanego woluminu FAT16/FAT32; możliwy inny format lub uszkodzone struktury |
 | `SD E01 CRC 17:00` | Polecenie odczytu przyjęte, lecz suma CRC danych się nie zgadza |
 | `SD E01 TOKEN 17:00` | Brak poprawnego tokenu danych po przyjęciu polecenia odczytu |
 | `REJECT`, `BUSY`, `STATUS` | Odrzucenie danych, przekroczony czas gotowości lub zgłoszony błąd karty |
 | `HAL`, `CLOCK` | Błąd transmisji HAL SPI lub zmiany częstotliwości magistrali |
 
-Po błędzie najlepiej zanotować **całą treść stopki**. Po zaktualizowaniu
-firmware uruchom płytkę z kartą włożoną przed resetem. Sam napis „FAT” przy
+Po błędzie najlepiej zanotować **całą treść stopki**. Sam napis „FAT” przy
 karcie 256 MB nie jest powodem do ponownego formatowania.
 
 W debuggerze: `sd_log_state`, `sd_log_filename`, `sd_log_written`,
@@ -182,11 +225,15 @@ polecenie, odpowiedź R1, token danych/statusu, status HAL i aktywacja CRC karty
 Dodatkowo `cmd8_response`, `cmd8_retries` i `legacy_probe` w `sd_spi_diag`
 zachowują wynik rozpoznania CMD8, liczbę ponowień i użycie próby zgodności
 dla odpowiedzi `00`/`04`, także po przejściu do dalszych poleceń.
+`ocr` i `ocr_valid` zachowują pełny rejestr OCR i informację, czy odczytano
+wszystkie cztery bajty bez błędu HAL.
 Zachowywany jest pierwszy błąd — późniejszy nieudany `f_close()` go nie zastępuje.
 Written liczy wiersze przyjęte
-przez `f_write`, nie potwierdzenie trwałości pamięci flash. Dropped sygnalizuje
-odrzucenie rekordu lub zdarzenie utraty ciągłości; nie jest dokładnym licznikiem
-próbek utraconych przy przepełnieniu sprzętowego FIFO.
+przez `f_write`, nie potwierdzenie trwałości pamięci flash. Dropped zlicza
+odrzucone rekordy, próbki odczytane podczas pauzy/braku karty oraz zdarzenia
+utraty ciągłości. Nie jest dokładnym licznikiem próbek utraconych w sprzętowym
+FIFO ani danych utraconych po wcześniejszym przyjęciu ich przez `f_write`.
+Oba liczniki są zachowywane przy automatycznym i ręcznym wznowieniu.
 
 ## Biblioteka i testy
 
@@ -214,4 +261,9 @@ opóźniony token potwierdzenia zapisu, CS między poleceniami, prędkości obu
 urządzeń i nowe komunikaty diagnostyczne (w tym nierozpoznany wolumin FAT).
 Testy CMD8 obejmują stałe odpowiedzi `00`/`04`, pojedyncze `00` przed poprawną
 odpowiedzią SD v2, odrzucenie CMD55, sprzeczne OCR/CSD oraz błędne R1 i R7.
+Testowane są również opóźniony bit gotowości OCR, jego pełna diagnostyka,
+odrzucenie niewłaściwego napięcia i samych jedynek, wielokrotne próby bez
+karty, ponowne włożenie tej samej i innej karty, zachowanie plików i luk w NR,
+B1 z filtrowaniem zboczy, ręczna pauza ponawiania, pełna karta bez tworzenia
+pustych plików, powrót IMU po awarii oraz odstęp ponawiania przy zawinięciu zegara.
 Testy programowe nie potwierdzają elektryki modułu ani działania fizycznej karty.

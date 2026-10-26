@@ -14,6 +14,9 @@ static uint8_t card_256mb;
 static int cmd8_reply=-1;
 static unsigned transient_cmd8_zero;
 static uint8_t bad_app_cmd,force_ocr_ccs,force_csd_v2;
+static unsigned ocr_busy_polls,ocr_reads;
+static uint8_t override_ocr;
+static uint32_t custom_ocr;
 static uint32_t tick,write_sector;
 uint32_t HAL_GetTick(void) { return tick; }
 void HAL_Delay(uint32_t n) { tick+=n; }
@@ -79,7 +82,12 @@ HAL_StatusTypeDef HAL_SPI_Transmit(SPI_HandleTypeDef *handle,const uint8_t *data
         assert(arg==(legacy?0:0x40000000U));
         if (acmd_waits) { --acmd_waits; push(1); }
         else { initialized=1; push(0); } break;
-    case 58: push(0);push(legacy && !force_ocr_ccs?0x80:0xC0);push(0xFF);push(0x80);push(0);break;
+    case 58: {
+        ++ocr_reads;
+        uint32_t ocr=override_ocr ? custom_ocr : (legacy && !force_ocr_ccs?0x80FF8000UL:0xC0FF8000UL);
+        if (ocr_busy_polls) { --ocr_busy_polls; ocr&=~0x80000000UL; }
+        push(0);push(ocr>>24);push(ocr>>16);push(ocr>>8);push(ocr);break;
+    }
     case 16: assert(legacy && arg==512);push(0);break;
     case 59: assert(arg==1);push(reject_crc_command?4:0);break;
     case 9: {
@@ -130,6 +138,7 @@ static void init(uint8_t old)
     reject_crc_command=command_since_select=hal_timeout=wrong_echo=card_256mb=0;
     ignored_resets=reset_attempts=acmd_waits=response_delay=high_clocks=0;
     cmd8_reply=-1; transient_cmd8_zero=0; bad_app_cmd=force_ocr_ccs=force_csd_v2=0;
+    ocr_busy_polls=ocr_reads=0; override_ocr=0; custom_ocr=0;
     spi.Init.BaudRatePrescaler=SPI_BAUDRATEPRESCALER_8;
     SD_SPI_Bind(&spi); assert(disk_initialize(0)==0);
     assert(!selected && !tft_selected && spi.Init.BaudRatePrescaler==SPI_BAUDRATEPRESCALER_8);
@@ -189,5 +198,15 @@ int main(void)
     assert(disk_initialize(0)==STA_NOINIT && sd_spi_diag.error==SD_SPI_CSD && !writes);
     init(1); cmd8_reply=9;
     assert(disk_initialize(0)==STA_NOINIT && sd_spi_diag.error==SD_SPI_CMD8 && !writes);
-    puts("PASS SD SPI: SDHC/SDSC/256MB, CMD8 00/04 recovery with ACMD41/OCR/CSD guards, CS, speed, delayed response, CRC and errors");
+    init(1); cmd8_reply=0; card_256mb=1; ocr_busy_polls=3; ocr_reads=0;
+    assert(disk_initialize(0)==0 && ocr_reads==4 && sd_spi_diag.ocr_valid && sd_spi_diag.ocr==0x80FF8000UL);
+    assert(disk_write(0,data,3,1)==RES_OK); /* Delayed OCR ready bit after ACMD41. */
+    init(1); override_ocr=1; custom_ocr=0x00FF8000UL; uint32_t start=tick;
+    assert(disk_initialize(0)==STA_NOINIT && sd_spi_diag.error==SD_SPI_OCR && !writes);
+    assert(sd_spi_diag.ocr_valid && sd_spi_diag.ocr==custom_ocr && tick-start>=1000U && tick-start<2000U);
+    init(1); override_ocr=1; custom_ocr=0x80000000UL;
+    assert(disk_initialize(0)==STA_NOINIT && sd_spi_diag.error==SD_SPI_OCR && !writes && sd_spi_diag.ocr==custom_ocr);
+    init(0); override_ocr=1; custom_ocr=UINT32_MAX;
+    assert(disk_initialize(0)==STA_NOINIT && sd_spi_diag.error==SD_SPI_OCR && !writes);
+    puts("PASS SD SPI: SDHC/SDSC/256MB, CMD8 recovery, delayed OCR ready/raw diagnostics, addressing guards, CS, speed, CRC and errors");
 }

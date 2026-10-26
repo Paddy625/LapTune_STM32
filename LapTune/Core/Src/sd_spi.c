@@ -211,11 +211,24 @@ DSTATUS disk_initialize(BYTE drive)
         SD_SPI_Service(); HAL_Delay(1);
     } while ((uint32_t)(HAL_GetTick()-start)<1500U && !io_failed);
     if (r) { error(SD_SPI_ACMD41); goto done; }
-    if (command(58,0)) { error(SD_SPI_OCR); goto done; }
-    uint8_t ocr[4]; for (unsigned i=0;i<4;++i) ocr[i]=exchange(0xFF);
-    if (!(ocr[0] & 0x80U) || !(ocr[1] & 0x30U)) { error(SD_SPI_OCR); goto done; }
-    if (!v2 && (ocr[0]&0x40U)) { error(SD_SPI_OCR); goto done; }
-    block_addressed=v2 && (ocr[0]&0x40U);
+    /* Allow a bounded settling delay for OCR power-up status after ACMD41.
+       Preserve the complete R3 payload; R1=00 alone cannot diagnose OCR. */
+    start=HAL_GetTick();
+    do {
+        sd_spi_diag.ocr_valid=0;
+        if (command(58,0)) { error(SD_SPI_OCR); goto done; }
+        uint32_t ocr=0;
+        for (unsigned i=0;i<4;++i) ocr=(ocr<<8)|exchange(0xFF);
+        if (io_failed) goto done;
+        sd_spi_diag.ocr=ocr; sd_spi_diag.ocr_valid=1;
+        if (ocr&0x80000000UL) break;
+        SD_SPI_Service(); HAL_Delay(10);
+    } while ((uint32_t)(HAL_GetTick()-start)<1000U);
+    if (sd_spi_diag.ocr==UINT32_MAX || !(sd_spi_diag.ocr&0x80000000UL) || !(sd_spi_diag.ocr&0x00300000UL)) {
+        error(SD_SPI_OCR); goto done;
+    }
+    if (!v2 && (sd_spi_diag.ocr&0x40000000UL)) { error(SD_SPI_OCR); goto done; }
+    block_addressed=v2 && (sd_spi_diag.ocr&0x40000000UL);
     if (!block_addressed && command(16,512)) { error(SD_SPI_CMD16); goto done; }
     r=command(59,1); /* Older cards may reject CMD59; still verify all read CRCs. */
     if (r!=0 && r!=4) { error(SD_SPI_CMD59); goto done; }
