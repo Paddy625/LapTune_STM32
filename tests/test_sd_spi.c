@@ -11,6 +11,9 @@ static uint8_t reject_crc_command,command_since_select,hal_timeout,wrong_echo;
 static uint8_t replies[1024],pending[512],storage[1024][512],write_stage,crc_hi;
 static unsigned head,tail,services,commands,writes,ignored_resets,reset_attempts,acmd_waits,response_delay,high_clocks;
 static uint8_t card_256mb;
+static int cmd8_reply=-1;
+static unsigned transient_cmd8_zero;
+static uint8_t bad_app_cmd,force_ocr_ccs,force_csd_v2;
 static uint32_t tick,write_sector;
 uint32_t HAL_GetTick(void) { return tick; }
 void HAL_Delay(uint32_t n) { tick+=n; }
@@ -63,13 +66,20 @@ HAL_StatusTypeDef HAL_SPI_Transmit(SPI_HandleTypeDef *handle,const uint8_t *data
         assert(data[5]==0x95 && high_clocks>=80); ++reset_attempts;
         if (ignored_resets) { --ignored_resets; break; }
         initialized=0; push(1); break;
-    case 8: assert(data[5]==0x87); push(legacy?5:1); if (!legacy) { push(0);push(0);push(1);push(wrong_echo?0xAB:0xAA); } break;
-    case 55: push(initialized?0:1); break;
+    case 8: {
+        assert(data[5]==0x87);
+        uint8_t r=cmd8_reply<0 ? (legacy?5:1) : (uint8_t)cmd8_reply;
+        if (transient_cmd8_zero) { --transient_cmd8_zero; r=0; }
+        push(r);
+        if (r==1) { push(0);push(0);push(1);push(wrong_echo?0xAB:0xAA); }
+        break;
+    }
+    case 55: push(bad_app_cmd?5:(initialized?0:1)); break;
     case 41:
         assert(arg==(legacy?0:0x40000000U));
         if (acmd_waits) { --acmd_waits; push(1); }
         else { initialized=1; push(0); } break;
-    case 58: push(0);push(legacy?0x80:0xC0);push(0xFF);push(0x80);push(0);break;
+    case 58: push(0);push(legacy && !force_ocr_ccs?0x80:0xC0);push(0xFF);push(0x80);push(0);break;
     case 16: assert(legacy && arg==512);push(0);break;
     case 59: assert(arg==1);push(reject_crc_command?4:0);break;
     case 9: {
@@ -77,6 +87,7 @@ HAL_StatusTypeDef HAL_SPI_Transmit(SPI_HandleTypeDef *handle,const uint8_t *data
         if (legacy) { csd[5]=9;csd[7]=63;csd[8]=0xC0; }
         else csd[0]=0x40;
         if (card_256mb) { assert(legacy); csd[7]=255; csd[9]=3; csd[10]=0x80; }
+        if (force_csd_v2) csd[0]=0x40;
         push(0);block(csd,16);break;
     }
     case 17: {
@@ -118,6 +129,7 @@ static void init(uint8_t old)
     legacy=old;services=commands=writes=tick=0;
     reject_crc_command=command_since_select=hal_timeout=wrong_echo=card_256mb=0;
     ignored_resets=reset_attempts=acmd_waits=response_delay=high_clocks=0;
+    cmd8_reply=-1; transient_cmd8_zero=0; bad_app_cmd=force_ocr_ccs=force_csd_v2=0;
     spi.Init.BaudRatePrescaler=SPI_BAUDRATEPRESCALER_8;
     SD_SPI_Bind(&spi); assert(disk_initialize(0)==0);
     assert(!selected && !tft_selected && spi.Init.BaudRatePrescaler==SPI_BAUDRATEPRESCALER_8);
@@ -155,5 +167,27 @@ int main(void)
     init(0); hal_timeout=1; assert(disk_read(0,out,0,1)==RES_ERROR);
     assert(sd_spi_diag.error==SD_SPI_HAL && sd_spi_diag.hal_status==HAL_TIMEOUT && !selected);
     assert(!strcmp(SD_SPI_ErrorName(),"HAL") && spi.Init.BaudRatePrescaler==SPI_BAUDRATEPRESCALER_8);
-    puts("PASS SD SPI: SDHC/SDSC/256MB, per-command CS, reset retries, 2MHz/restore TFT, delayed write response, CRC, diagnostics and timeouts");
+
+    /* Exact reported failure: a legacy card returns 00 instead of 05 to CMD8.
+       Accept it only after independent legacy SD/addressing/CSD validation. */
+    for (unsigned reply=0;reply<=4;reply+=4) {
+        init(1); card_256mb=1; cmd8_reply=(int)reply; reset_attempts=0;
+        assert(disk_initialize(0)==0 && reset_attempts==3);
+        assert(sd_spi_diag.cmd8_response==reply && sd_spi_diag.cmd8_retries==2 && sd_spi_diag.legacy_probe);
+        assert(disk_ioctl(0,GET_SECTOR_COUNT,&sectors)==RES_OK && sectors==524288);
+        assert(disk_write(0,data,3,1)==RES_OK && disk_read(0,out,3,1)==RES_OK && !memcmp(data,out,512));
+    }
+    init(0); transient_cmd8_zero=1; reset_attempts=0;
+    assert(disk_initialize(0)==0 && reset_attempts==2); /* Retry can recover normal SD v2. */
+    assert(sd_spi_diag.cmd8_response==1 && sd_spi_diag.cmd8_retries==1 && !sd_spi_diag.legacy_probe);
+    assert(disk_write(0,data,3,1)==RES_OK);
+    init(1); cmd8_reply=0; bad_app_cmd=1;
+    assert(disk_initialize(0)==STA_NOINIT && sd_spi_diag.error==SD_SPI_ACMD41 && !writes);
+    init(1); cmd8_reply=0; force_ocr_ccs=1;
+    assert(disk_initialize(0)==STA_NOINIT && sd_spi_diag.error==SD_SPI_OCR && !writes);
+    init(1); cmd8_reply=0; force_csd_v2=1;
+    assert(disk_initialize(0)==STA_NOINIT && sd_spi_diag.error==SD_SPI_CSD && !writes);
+    init(1); cmd8_reply=9;
+    assert(disk_initialize(0)==STA_NOINIT && sd_spi_diag.error==SD_SPI_CMD8 && !writes);
+    puts("PASS SD SPI: SDHC/SDSC/256MB, CMD8 00/04 recovery with ACMD41/OCR/CSD guards, CS, speed, delayed response, CRC and errors");
 }

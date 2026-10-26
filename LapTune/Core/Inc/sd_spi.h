@@ -13,6 +13,7 @@ typedef enum {
 typedef struct {
     SD_SPI_Error error;
     uint8_t command, response, token, crc_enabled;
+    uint8_t cmd8_response, cmd8_retries, legacy_probe;
     HAL_StatusTypeDef hal_status;
 } SD_SPI_Diagnostics;
 extern volatile SD_SPI_Diagnostics sd_spi_diag;

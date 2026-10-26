@@ -18,7 +18,7 @@ const char *SD_SPI_ErrorName(void)
 }
 static void reset_diagnostics(void)
 {
-    sd_spi_diag=(SD_SPI_Diagnostics){.command=0xFF,.response=0xFF,.token=0xFF};
+    sd_spi_diag=(SD_SPI_Diagnostics){.command=0xFF,.response=0xFF,.token=0xFF,.cmd8_response=0xFF};
 }
 static void error(SD_SPI_Error reason)
 {
@@ -160,6 +160,17 @@ static uint8_t card_status(void)
     if (r || detail || io_failed) { error(SD_SPI_STATUS); return 0; }
     return 1;
 }
+static uint8_t reset_to_idle(void)
+{
+    uint32_t start=HAL_GetTick(); uint8_t r;
+    do {
+        r=command(0,0);
+        if (r==1 || io_failed) break;
+        SD_SPI_Service(); HAL_Delay(10);
+    } while ((uint32_t)(HAL_GetTick()-start)<1000U);
+    if (r!=1 || io_failed) { error(SD_SPI_CMD0); return 0; }
+    return 1;
+}
 DSTATUS disk_initialize(BYTE drive)
 {
     if (drive) return STA_NOINIT;
@@ -171,19 +182,26 @@ DSTATUS disk_initialize(BYTE drive)
     if (!speed(SPI_BAUDRATEPRESCALER_256)) goto done;
     HAL_Delay(10); SD_SPI_Service();
     for (unsigned i=0; i<10; ++i) (void)exchange(0xFF);
-    uint32_t start=HAL_GetTick(); uint8_t r;
-    do {
-        r=command(0,0);
-        if (r==1 || io_failed) break;
-        SD_SPI_Service(); HAL_Delay(10);
-    } while ((uint32_t)(HAL_GetTick()-start)<1000U);
-    if (r!=1 || io_failed) { error(SD_SPI_CMD0); goto done; }
-    r=command(8,0x1AA); uint8_t v2=(r==1);
+    uint8_t r=0xFF;
+    for (unsigned attempt=0;attempt<3;++attempt) {
+        if (!reset_to_idle()) goto done;
+        r=command(8,0x1AA); sd_spi_diag.cmd8_response=r;
+        if (io_failed) goto done;
+        /* 00/04 after CMD0 are atypical: retry the complete reset/probe first. */
+        if ((r==0 || r==4) && attempt<2) {
+            ++sd_spi_diag.cmd8_retries; SD_SPI_Service(); HAL_Delay(10);
+        } else break;
+    }
+    uint8_t v2=(r==1);
     if (v2) {
         uint8_t r7[4]; for (unsigned i=0;i<4;++i) r7[i]=exchange(0xFF);
-        if (r7[2]!=1 || r7[3]!=0xAA) { error(SD_SPI_CMD8); goto done; }
-    } else if (r!=5) { error(SD_SPI_CMD8); goto done; } /* SD v1; not MMC. */
-    start=HAL_GetTick();
+        if (r7[0] || r7[1] || r7[2]!=1 || r7[3]!=0xAA) { error(SD_SPI_CMD8); goto done; }
+    } else if (r==0 || r==4 || r==5) {
+        /* 05 is the standard SD v1 response. 00/04 only permit a legacy probe:
+           ACMD41, OCR and CSD below must independently confirm byte-addressed SD. */
+        sd_spi_diag.legacy_probe=(r!=5);
+    } else { error(SD_SPI_CMD8); goto done; } /* Never fall back on CRC errors/timeouts. */
+    uint32_t start=HAL_GetTick();
     do {
         r=command(55,0);
         if (r>1) { error(SD_SPI_ACMD41); goto done; }
@@ -196,6 +214,7 @@ DSTATUS disk_initialize(BYTE drive)
     if (command(58,0)) { error(SD_SPI_OCR); goto done; }
     uint8_t ocr[4]; for (unsigned i=0;i<4;++i) ocr[i]=exchange(0xFF);
     if (!(ocr[0] & 0x80U) || !(ocr[1] & 0x30U)) { error(SD_SPI_OCR); goto done; }
+    if (!v2 && (ocr[0]&0x40U)) { error(SD_SPI_OCR); goto done; }
     block_addressed=v2 && (ocr[0]&0x40U);
     if (!block_addressed && command(16,512)) { error(SD_SPI_CMD16); goto done; }
     r=command(59,1); /* Older cards may reject CMD59; still verify all read CRCs. */
@@ -203,6 +222,7 @@ DSTATUS disk_initialize(BYTE drive)
     sd_spi_diag.crc_enabled=r==0;
     uint8_t csd[16];
     if (command(9,0) || !receive_block(csd,sizeof(csd))) { error(SD_SPI_CSD); goto done; }
+    if ((csd[0]>>6)!=(block_addressed ? 1U : 0U)) { error(SD_SPI_CSD); goto done; }
     uint64_t count=0;
     if ((csd[0]>>6)==1) {
         uint32_t size=((uint32_t)(csd[7]&63U)<<16)|((uint32_t)csd[8]<<8)|csd[9];

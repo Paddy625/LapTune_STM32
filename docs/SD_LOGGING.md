@@ -36,6 +36,16 @@ fabryczny exFAT nie jest obsługiwany. Firmware **nie formatuje karty**.
 Starsze karty SDSC, w tym **256 MB z FAT16** (w Windows często oznaczone
 po prostu jako „FAT”), również są obsługiwane, z adresowaniem bajtowym.
 
+Standardowa odpowiedź starszej SD na CMD8 to `05`. Dla zgłoszonej na sprzęcie
+odpowiedzi `00` (oraz `04`) sterownik ponawia pełną sekwencję CMD0/CMD8
+maksymalnie trzy razy. Jeśli odpowiedź pozostaje taka sama, próbuje inicjalizacji
+starszej SD przez CMD55/ACMD41 bez HCS. Zapis jest dopuszczany dopiero po
+poprawnym zakończeniu ACMD41, potwierdzeniu adresowania bajtowego w OCR,
+ustawieniu bloku 512 B oraz odczycie CSD v1 z poprawnym CRC i pojemnością.
+Odpowiedź `00` sama nie dowodzi, że karta jest starszą SD. Błąd CRC polecenia,
+brak odpowiedzi, niepoprawne R7 lub sprzeczne OCR/CSD nadal przerywają start.
+MMC nie jest obsługiwane.
+
 Reset CMD0 jest ponawiany przez maksymalnie około sekundę. Dla starszych kart
 odrzucenie CMD59 jako nieobsługiwanego polecenia nie przerywa inicjalizacji.
 Sterownik nadal sprawdza CRC16 odczytanych danych i wysyła poprawne CRC przy
@@ -154,6 +164,7 @@ pokazywane jest np. `SD E13 FAT16/32`, bez dodatkowych pól SPI.
 | Przykład / oznaczenie | Znaczenie |
 | --- | --- |
 | `SD E03 CMD0 00:FF` | Karta nie odpowiedziała poprawnie na reset / wejście w tryb SPI |
+| `SD E03 CMD8 08:00` | Nietypowa odpowiedź na rozpoznanie wersji karty przed odczytem FAT; aktualny kod ponawia rozpoznanie i weryfikuje tryb starszej SD |
 | `SD E03 ACMD41 41:01` | Karta pozostała w stanie inicjalizacji do upływu limitu czasu |
 | `SD E13 FAT16/32` | SPI zainicjalizowane, ale brak rozpoznanego woluminu FAT16/FAT32; możliwy inny format lub uszkodzone struktury |
 | `SD E01 CRC 17:00` | Polecenie odczytu przyjęte, lecz suma CRC danych się nie zgadza |
@@ -168,6 +179,9 @@ karcie 256 MB nie jest powodem do ponownego formatowania.
 W debuggerze: `sd_log_state`, `sd_log_filename`, `sd_log_written`,
 `sd_log_error` (FRESULT), `sd_log_dropped` oraz `sd_spi_diag` (przyczyna,
 polecenie, odpowiedź R1, token danych/statusu, status HAL i aktywacja CRC karty).
+Dodatkowo `cmd8_response`, `cmd8_retries` i `legacy_probe` w `sd_spi_diag`
+zachowują wynik rozpoznania CMD8, liczbę ponowień i użycie próby zgodności
+dla odpowiedzi `00`/`04`, także po przejściu do dalszych poleceń.
 Zachowywany jest pierwszy błąd — późniejszy nieudany `f_close()` go nie zastępuje.
 Written liczy wiersze przyjęte
 przez `f_write`, nie potwierdzenie trwałości pamięci flash. Dropped sygnalizuje
@@ -198,4 +212,6 @@ Model karty obejmuje również starszą kartę SDSC 256 MB, odrzucenie CMD59,
 kilka nieudanych resetów przed poprawną odpowiedzią, oczekiwanie na ACMD41,
 opóźniony token potwierdzenia zapisu, CS między poleceniami, prędkości obu
 urządzeń i nowe komunikaty diagnostyczne (w tym nierozpoznany wolumin FAT).
+Testy CMD8 obejmują stałe odpowiedzi `00`/`04`, pojedyncze `00` przed poprawną
+odpowiedzią SD v2, odrzucenie CMD55, sprzeczne OCR/CSD oraz błędne R1 i R7.
 Testy programowe nie potwierdzają elektryki modułu ani działania fizycznej karty.
