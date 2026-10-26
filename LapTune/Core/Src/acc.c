@@ -1,72 +1,79 @@
-/*
- * acc.c
- *
- *  Created on: Nov 2, 2025
- *      Author: Adam
- */
-
-
 #include "acc.h"
-#define LIS3DH_SPI_TIMEOUT_MS 10U
+#include <stddef.h>
 
-uint8_t LIS3DH_ReadReg(uint8_t reg)
+#define SPI_TIMEOUT_MS 10U
+#define RESET_ATTEMPTS 100U
+
+static uint8_t read_regs(uint8_t reg, uint8_t *data, uint16_t len)
 {
-    uint8_t tx = reg | 0x80; // READ bit
-    uint8_t rx = 0;
-
-    LIS3DH_CS_LOW();
-    HAL_SPI_Transmit(&hspi2, &tx, 1, LIS3DH_SPI_TIMEOUT_MS);
-    HAL_SPI_Receive(&hspi2, &rx, 1, LIS3DH_SPI_TIMEOUT_MS);
-    LIS3DH_CS_HIGH();
-
-    return rx;
+    /* LSM6DS3 uses CTRL3_C.IF_INC, not LIS3DH's command bit 0x40. */
+    uint8_t command = reg | 0x80U;
+    HAL_GPIO_WritePin(LSM6DS3_CS_PORT, LSM6DS3_CS_PIN, GPIO_PIN_RESET);
+    HAL_StatusTypeDef status = HAL_SPI_Transmit(&hspi2, &command, 1U, SPI_TIMEOUT_MS);
+    if (status == HAL_OK) status = HAL_SPI_Receive(&hspi2, data, len, SPI_TIMEOUT_MS);
+    HAL_GPIO_WritePin(LSM6DS3_CS_PORT, LSM6DS3_CS_PIN, GPIO_PIN_SET);
+    return status == HAL_OK;
 }
 
-void LIS3DH_WriteReg(uint8_t reg, uint8_t value)
+static uint8_t write_reg(uint8_t reg, uint8_t value)
 {
-    uint8_t tx[2];
-    tx[0] = reg & 0x7F; // WRITE
-    tx[1] = value;
-
-    LIS3DH_CS_LOW();
-    HAL_SPI_Transmit(&hspi2, tx, 2, LIS3DH_SPI_TIMEOUT_MS);
-    LIS3DH_CS_HIGH();
+    uint8_t tx[2] = {reg & 0x7FU, value};
+    HAL_GPIO_WritePin(LSM6DS3_CS_PORT, LSM6DS3_CS_PIN, GPIO_PIN_RESET);
+    HAL_StatusTypeDef status = HAL_SPI_Transmit(&hspi2, tx, sizeof(tx), SPI_TIMEOUT_MS);
+    HAL_GPIO_WritePin(LSM6DS3_CS_PORT, LSM6DS3_CS_PIN, GPIO_PIN_SET);
+    return status == HAL_OK;
 }
 
-uint8_t LIS3DH_Init(void)
+uint8_t LSM6DS3_Init(void)
 {
-    uint8_t id = LIS3DH_ReadReg(LIS3DH_WHO_AM_I);
-    if (id != 0x33) return 0; // Wrong ID
-
-    // 100Hz | XYZ enabled | normal mode
-    LIS3DH_WriteReg(LIS3DH_CTRL_REG1, LIS3DH_CTRL_REG1_CONF);
-
-    // BDU | +/-16g | 12-bit high resolution (left-aligned in 16 bits)
-    LIS3DH_WriteReg(LIS3DH_CTRL_REG4, LIS3DH_CTRL_REG4_CONF);
-
-    return LIS3DH_ReadReg(LIS3DH_CTRL_REG1) == LIS3DH_CTRL_REG1_CONF &&
-           LIS3DH_ReadReg(LIS3DH_CTRL_REG4) == LIS3DH_CTRL_REG4_CONF;
+    static const uint8_t config[][2] = {
+        {LSM6DS3_CTRL3_C,  LSM6DS3_CTRL3_C_CONF},
+        {LSM6DS3_CTRL4_C,  LSM6DS3_CTRL4_C_CONF},
+        {LSM6DS3_CTRL9_XL, LSM6DS3_XYZ_ENABLE},
+        {LSM6DS3_CTRL10_C, LSM6DS3_XYZ_ENABLE},
+        {LSM6DS3_CTRL1_XL, LSM6DS3_CTRL1_XL_CONF},
+        {LSM6DS3_CTRL2_G,  LSM6DS3_CTRL2_G_CONF}
+    };
+    uint8_t value = 0;
+    if (!read_regs(LSM6DS3_WHO_AM_I, &value, 1U) || value != LSM6DS3_DEVICE_ID) return 0;
+    if (!write_reg(LSM6DS3_CTRL3_C, 0x01U)) return 0; /* Software reset. */
+    unsigned attempt;
+    for (attempt = 0; attempt < RESET_ATTEMPTS; ++attempt) {
+        if (!read_regs(LSM6DS3_CTRL3_C, &value, 1U)) return 0;
+        if (!(value & 0x01U)) break;
+        HAL_Delay(1U);
+    }
+    if (attempt == RESET_ATTEMPTS) return 0;
+    for (unsigned i = 0; i < sizeof(config)/sizeof(config[0]); ++i) {
+        if (!write_reg(config[i][0], config[i][1]) ||
+            !read_regs(config[i][0], &value, 1U) || value != config[i][1]) return 0;
+    }
+    return 1;
 }
 
-uint8_t LIS3DH_ReadXYZ(float *ax, float *ay, float *az)
+static int16_t signed_le16(const uint8_t *bytes)
 {
-    uint8_t tx = LIS3DH_OUT_X_L | 0x80 | 0x40; // READ + MULTI
-    uint8_t raw[6];
+    /* Explicit sign conversion, including -32768. No LIS3DH-style >>4 shift. */
+    uint16_t value = (uint16_t)bytes[0] | ((uint16_t)bytes[1] << 8);
+    return value < 0x8000U ? (int16_t)value : (int16_t)((int32_t)value - 65536);
+}
 
-    LIS3DH_CS_LOW();
-    HAL_StatusTypeDef status = HAL_SPI_Transmit(&hspi2, &tx, 1, LIS3DH_SPI_TIMEOUT_MS);
-    if (status == HAL_OK)
-        status = HAL_SPI_Receive(&hspi2, raw, 6, LIS3DH_SPI_TIMEOUT_MS);
-    LIS3DH_CS_HIGH();
-    if (status != HAL_OK) return 0U;
-
-    int16_t x = (int16_t)((raw[1] << 8) | raw[0]) >> 4;
-    int16_t y = (int16_t)((raw[3] << 8) | raw[2]) >> 4;
-    int16_t z = (int16_t)((raw[5] << 8) | raw[4]) >> 4;
-
-    // Convert to g
-    *ax = x * LIS3DH_SENS_16G;
-    *ay = y * LIS3DH_SENS_16G;
-    *az = z * LIS3DH_SENS_16G;
-    return 1U;
+LSM6DS3_ReadResult LSM6DS3_ReadSample(LSM6DS3_Sample *sample)
+{
+    uint8_t status = 0, raw[12] = {0};
+    if (sample == NULL || !read_regs(LSM6DS3_STATUS_REG, &status, 1U))
+        return LSM6DS3_READ_ERROR;
+    if ((status & LSM6DS3_DATA_READY) != LSM6DS3_DATA_READY)
+        return LSM6DS3_READ_NOT_READY;
+    if (!read_regs(LSM6DS3_OUTX_L_G, raw, sizeof(raw))) return LSM6DS3_READ_ERROR;
+    LSM6DS3_Sample next = {
+        .ax = signed_le16(raw+6) * LSM6DS3_ACCEL_G_LSB,
+        .ay = signed_le16(raw+8) * LSM6DS3_ACCEL_G_LSB,
+        .az = signed_le16(raw+10) * LSM6DS3_ACCEL_G_LSB,
+        .gx = signed_le16(raw) * LSM6DS3_GYRO_DPS_LSB,
+        .gy = signed_le16(raw+2) * LSM6DS3_GYRO_DPS_LSB,
+        .gz = signed_le16(raw+4) * LSM6DS3_GYRO_DPS_LSB
+    };
+    *sample = next;
+    return LSM6DS3_READ_OK;
 }

@@ -54,6 +54,7 @@ UART_HandleTypeDef huart3;
 /* USER CODE BEGIN PV */
 
 float ax, max_x=0, min_x=0, ay, max_y=0, min_y=0, az, max_z=0, min_z=0;
+float gx, gy, gz; /* LSM6DS3 angular velocity in degrees/s; not drawn on TFT. */
 static uint8_t sensor_ok, have_sample;
 static uint32_t last_sample, last_sensor_retry;
 
@@ -114,7 +115,7 @@ int main(void)
     Error_Handler();
   }
   if (GPS_Init(&huart3) != HAL_OK) Error_Handler();
-  sensor_ok = LIS3DH_Init();
+  sensor_ok = LSM6DS3_Init();
   last_sample = HAL_GetTick();
   last_sensor_retry = last_sample;
 
@@ -130,13 +131,17 @@ int main(void)
     uint32_t now = HAL_GetTick();
     GPS_Process(now);
     if (!sensor_ok && (uint32_t)(now - last_sensor_retry) >= 1000U) {
-      sensor_ok = LIS3DH_Init();
+      sensor_ok = LSM6DS3_Init();
       last_sensor_retry = now;
     }
     if (sensor_ok && (uint32_t)(now - last_sample) >= 10U) {
       last_sample = now;
-      sensor_ok = LIS3DH_ReadXYZ(&ax, &ay, &az);
-      if (sensor_ok) {
+      LSM6DS3_Sample sample;
+      LSM6DS3_ReadResult result = LSM6DS3_ReadSample(&sample);
+      if (result == LSM6DS3_READ_ERROR) sensor_ok = 0U;
+      if (result == LSM6DS3_READ_OK) {
+        ax = sample.ax; ay = sample.ay; az = sample.az;
+        gx = sample.gx; gy = sample.gy; gz = sample.gz;
         if (!have_sample) {
           min_x = max_x = ax; min_y = max_y = ay; min_z = max_z = az;
           have_sample = 1U;
@@ -348,7 +353,7 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure TFT CS (PB6) and LIS3DH CS (PB12), both inactive high. */
+  /*Configure TFT CS (PB6) and LSM6DS3 CS (PB12), both inactive high. */
   GPIO_InitStruct.Pin = GPIO_PIN_12|TFT_CS_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;

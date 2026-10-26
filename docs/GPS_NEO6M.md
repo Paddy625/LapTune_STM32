@@ -2,7 +2,7 @@
 
 ![Cały układ z GPS](wiring_st7735s.png)
 
-[Schemat SVG](wiring_st7735s.svg). Schemat obejmuje Nucleo, LIS3DH, ST7735S
+[Schemat SVG](wiring_st7735s.svg). Schemat obejmuje Nucleo, LSM6DS3, ST7735S
 i dodatkowy moduł GY-NEO6MV2 ze zdjęcia.
 
 ## Połączenia
@@ -12,7 +12,7 @@ i dodatkowy moduł GY-NEO6MV2 ze zdjęcia.
 | VCC | 5V, CN6/5 | Tylko wejście VCC płytki GY-NEO6MV2 z regulatorem dopuszczającym 5 V — patrz poniżej |
 | RX | PB10 / USART3_TX, CN10/25, także D6 | Opcjonalne; obecny kod nie wysyła konfiguracji do GPS |
 | TX | PB11 / USART3_RX, CN10/18 | Wymagane; tędy odbieramy NMEA |
-| GND | GND Nucleo | Wspólna masa z TFT i LIS3DH |
+| GND | GND Nucleo | Wspólna masa z TFT i LSM6DS3 |
 
 Łączymy **TX GPS z RX STM32**. Piny UART pracują w logice **3,3 V**.
 VCC płytki i poziom sygnałów UART to różne rzeczy. Nie podawaj 5 V na RX/TX.

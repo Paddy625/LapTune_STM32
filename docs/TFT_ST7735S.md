@@ -1,4 +1,4 @@
-# NUCLEO-F103RB + LIS3DH + ST7735S 160×128 + GPS NEO-6M
+# NUCLEO-F103RB + LSM6DS3 + ST7735S 160×128 + GPS NEO-6M
 
 ![Schemat połączeń](wiring_st7735s.png)
 
@@ -8,8 +8,8 @@ Dodano GPS NEO-6M na USART3 (PB10/PB11). Pełne połączenia, wymagania zasilani
 i opis odczytów: [GPS_NEO6M.md](GPS_NEO6M.md).
 
 Wyświetlacz pracuje poziomo, na osobnym SPI1, w trybie 0, 8 MHz.
-LIS3DH pozostaje na SPI2, w trybie 3, teraz 8 MHz zamiast wcześniejszych
-16 MHz (limit zegara SPI LIS3DH wynosi 10 MHz). Wszystkie masy są wspólne.
+LSM6DS3 zastępuje LIS3DH na SPI2, w trybie 3, 8 MHz. Połączenia nowego modułu
+i odczyt żyroskopu opisuje [IMU_LSM6DS3.md](IMU_LSM6DS3.md). Wszystkie masy są wspólne.
 Sygnały i VCC wyświetlacza: **3,3 V**, bez podawania 5 V na piny.
 
 ## Połączenia TFT — kolejność pinów podana przez użytkownika
@@ -45,9 +45,9 @@ na Nucleo; po zmianie pełni funkcję zegara SPI, więc LD2 nie jest diodą stat
 Jeśli przewody są długie i transmisja jest niestabilna, skróć je lub zwiększ
 preskaler SPI1 z 8 do 16 (4 MHz) w `main.c` oraz w konfiguracji `.ioc`.
 
-## Istniejący LIS3DH
+## IMU LSM6DS3 (zamiast LIS3DH)
 
-| LIS3DH | Nucleo | Złącze Morpho |
+| LSM6DS3 | Nucleo | Złącze Morpho |
 | --- | --- | --- |
 | VCC | 3V3 | np. CN7/16 |
 | GND | GND | np. CN7/20 |
@@ -59,7 +59,8 @@ preskaler SPI1 z 8 do 16 (4 MHz) w `main.c` oraz w konfiguracji `.ioc`.
 Na przesłanym pierwotnym obrazku SCL prowadzi do PB15, a SDA do PB13.
 Powyższa tabela odpowiada sprzętowemu SPI2 i kodowi projektu: **SCL → PB13,
 SDA → PB15**. Jeżeli odczyt działa na płytce, porównaj te oznaczenia ze swoim
-rzeczywistym okablowaniem; dodanie TFT nie wymaga przenoszenia LIS3DH na SPI1.
+rzeczywistym okablowaniem. LSM6DS3 używa tych samych sygnałów SPI2;
+sprawdź ich wyprowadzenia na nowej płytce KAmod.
 
 ## Kod i zachowanie
 
@@ -69,7 +70,8 @@ rzeczywistym okablowaniem; dodanie TFT nie wymaga przenoszenia LIS3DH na SPI1.
   Litera osi bezpośrednio poprzedza bieżącą wartość. Po prawej, mniejszą
   czcionką, wyświetlane są maksimum u góry i minimum na dole, bez podpisów.
   Min/max inicjalizowane są pierwszym poprawnym pomiarem, a nie zerem.
-  Czujnik ma ODR 100 Hz, zakres ±16 g, tryb HR i BDU; przelicznik 12 mg/LSB.
+  LSM6DS3 ma ODR 104 Hz, zakres ±16 g i BDU; przelicznik 0,488 mg/LSB.
+  Żyroskop ±2000°/s jest odczytywany do gx/gy/gz, bez nowych pól na TFT.
 - `main.c`: odczyt planowany co 10 ms, odświeżanie ekranu co 100 ms.
   Wysyłane jest jedno pole tekstowe na obieg pętli; nie czyścimy całego ekranu
   przy każdym pomiarze. Transmisje HAL są blokujące, więc okres odczytu ma jitter
@@ -122,7 +124,7 @@ bash tests/run.sh
 
 Sześć programów testowych korzysta z atrap HAL i sanitizerów Address/Undefined:
 komendy inicjalizacji, geometria, RGB565 i CS po błędach; układ pól, liczby,
-min/max, harmonogram i przepełnienie ticków; konfiguracja i konwersja LIS3DH
+min/max, harmonogram i przepełnienie ticków; konfiguracja i konwersja LSM6DS3
 oraz zachowanie po błędzie SPI. Nie zastępują testu na fizycznym wyświetlaczu.
 Dodatkowo sprawdzane są parser NMEA, odbiór UART i widok GPS.
 
