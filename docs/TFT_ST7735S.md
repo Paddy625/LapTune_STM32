@@ -40,7 +40,8 @@ nie został podany. Nie zasilaj LEDA z GPIO ani nie zwieraj ich bezpośrednio z 
 Piny GT zwykle obsługują osobny układ z czcionkami; kod używa własnej czcionki
 i nie komunikuje się z nim. GT_CS utrzymujemy w stanie wysokim.
 
-PA6 / SPI1 MISO pozostaje wolny. PA5 jest połączone także z zieloną diodą LD2
+PA6 / SPI1 MISO obsługuje teraz kartę SD; połączenia opisuje
+[SD_LOGGING.md](SD_LOGGING.md). PA5 jest połączone także z zieloną diodą LD2
 na Nucleo; po zmianie pełni funkcję zegara SPI, więc LD2 nie jest diodą statusu.
 Jeśli przewody są długie i transmisja jest niestabilna, skróć je lub zwiększ
 preskaler SPI1 z 8 do 16 (4 MHz) w `main.c` oraz w konfiguracji `.ioc`.
@@ -72,11 +73,11 @@ sprawdź ich wyprowadzenia na nowej płytce KAmod.
   ma skalę 1. Min/max obu czujników startują od pierwszego pomiaru, nie zera.
   LSM6DS3 ma ODR 104 Hz, zakres ±16 g i BDU; przelicznik 0,488 mg/LSB.
   Żyroskop ±2000°/s jest odczytywany do gx/gy/gz i ma własne min/max na TFT.
-- `main.c`: odczyt planowany co 10 ms, odświeżanie ekranu co 100 ms.
+- `main.c`: odczyt FIFO IMU przy ODR 104 Hz, odświeżanie ekranu co 100 ms.
   Wysyłany jest jeden wiersz IMU na obieg pętli; nie czyścimy całego ekranu
   przy każdym pomiarze. Transmisje HAL są blokujące, więc okres odczytu ma jitter
-  i nie stanowi gwarancji pobrania każdej próbki 100 Hz. Do ścisłego próbkowania
-  potrzebny byłby osobny mechanizm DRDY/timer/FIFO/DMA.
+  i może opóźniać renderowanie. Próbki są buforowane w FIFO i kolejce loggera;
+  wykryta utrata ciągłości zatrzymuje zapis SD. Szczegóły w SD_LOGGING.md.
 - Nieudany odczyt SPI nie nadpisuje pomiaru śmieciami. Przy błędzie czujnika
   wartości są zastępowane czerwonymi kreskami; inicjalizacja jest ponawiana co
   sekundę. Błąd transmisji TFT prowadzi do `Error_Handler()`.
@@ -123,11 +124,12 @@ Z katalogu głównego repozytorium:
 bash tests/run.sh
 ```
 
-Sześć programów testowych korzysta z atrap HAL i sanitizerów Address/Undefined:
+Dziewięć programów testowych korzysta z atrap HAL i sanitizerów Address/Undefined:
 komendy inicjalizacji, geometria, RGB565 i CS po błędach; układ pól, liczby,
 min/max, harmonogram i przepełnienie ticków; konfiguracja i konwersja LSM6DS3
 oraz zachowanie po błędzie SPI. Nie zastępują testu na fizycznym wyświetlaczu.
-Dodatkowo sprawdzane są parser NMEA, odbiór UART i widok GPS.
+Dodatkowo sprawdzane są parser NMEA, odbiór UART, widok GPS, zegar logowania,
+plik FAT i protokół SPI karty SD.
 
 W przygotowanym środowisku chmurowym z `/workspace`:
 

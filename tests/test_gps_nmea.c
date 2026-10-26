@@ -22,6 +22,8 @@ int main(void)
     assert(parse(&data, "GPRMC,123519.00,A,4807.038,N,01131.000,E,0.0,0.0,201026,,,A", 101));
     assert(data.year == 2026 && data.month == 10 && data.day == 20);
     assert(data.hour == 12 && data.minute == 35 && data.second == 19 && data.datetime_valid);
+    assert(parse(&data,"GPRMC,123519.1234,A,4807.038,N,01131.000,E,0,0,201026",101));
+    assert(data.millisecond==123);
     assert(parse(&data, "GNGGA,123520,3456.0000,S,05822.0000,W,1,10,1.0,-12.345,M,0,M,,", 102));
     assert(data.latitude_e7 == -349333333 && data.longitude_e7 == -583666667);
     assert(data.altitude_mm == -12345);

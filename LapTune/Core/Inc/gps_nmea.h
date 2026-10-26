@@ -10,6 +10,7 @@ typedef struct {
     int32_t latitude_e7, longitude_e7; /* Signed degrees times 10000000. */
     int32_t altitude_mm;              /* GGA altitude above mean sea level. */
     uint16_t year;
+    uint16_t millisecond;
     uint8_t month, day, hour, minute, second;
     uint8_t satellites, fix_quality;
     uint8_t connected, position_valid, altitude_valid, datetime_valid;

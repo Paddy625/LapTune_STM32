@@ -39,9 +39,11 @@ sygnały układu. Przed zasileniem sprawdź je na swojej płytce/dokumentacji.
 | Przelicznik | 0,000488 g/LSB | 0,070°/s/LSB |
 | Zmienne w `main.c` | `ax`, `ay`, `az` | `gx`, `gy`, `gz` |
 
-104 Hz to najbliższa dostępna ODR do poprzednich 100 Hz. Pętla nadal sprawdza
-próbki co co najmniej 10 ms, więc może pomijać próbki; nie jest to rejestrator
-wszystkich danych 104 Hz. Do takiego logowania potrzebny byłby FIFO lub DRDY.
+104 Hz to najbliższa dostępna ODR do poprzednich 100 Hz. Logger korzysta teraz
+z FIFO IMU: oba źródła bez decymacji, tryb ciągły przy 104 Hz, wzorzec gyro XYZ
+potem accel XYZ. Kolejka jest odczytywana także podczas oczekiwania na SD.
+Przepełnienie i utrata wyrównania wzorca zatrzymują logowanie zamiast
+kontynuować plik z nieznaną utratą danych. Szczegóły: [SD_LOGGING.md](SD_LOGGING.md).
 Przyspieszenie obejmuje grawitację. Żyroskop daje prędkość kątową, nie kąty
 obrotu; nie dodano całkowania, fuzji danych ani kalibracji biasu.
 
@@ -64,6 +66,8 @@ Przy odczycie wymagane są obie flagi gotowości: XLDA i GDA. Następnie jeden
 IF_INC w CTRL3_C; dawnego bitu MULTI 0x40 z LIS3DH nie wolno dokładać do adresu.
 Nie wykonujemy też przesunięcia danych o 4 bity jak dla starego czujnika.
 
+Główna pętla używa `LSM6DS3_EnableFIFO()` i `LSM6DS3_ReadFIFO()`.
+`LSM6DS3_ReadSample()` pozostaje funkcją bezpośredniego odczytu rejestrów.
 Wynik `READ_OK` aktualizuje sześć zmiennych i dotychczasowe min/max przyspieszeń.
 `READ_NOT_READY` zachowuje ostatnią próbkę i nie uruchamia ponownie inicjalizacji.
 `READ_ERROR` również zachowuje próbkę, ale oznacza czujnik jako niedostępny;
@@ -88,7 +92,7 @@ GX-2000.0 -0070.1 +2000.0
 Wiersze AX/GX, AY/GY, AZ/GZ zaczynają się odpowiednio na y=18/26, 36/44,
 54/62, czcionka 5×7 ze skalą 1. Każdy zajmuje 8 pikseli wysokości.
 GPS nadal zajmuje y=72..119; jego kod, kolory, teksty i odświeżanie nie
-zostały zmienione. Nagłówek i stopka są zachowane.
+zostały zmienione. Nagłówek jest zachowany; stopka pokazuje teraz status SD.
 
 Minima i maksima obu czujników są inicjalizowane pierwszą poprawną próbką
 oraz aktualizowane po każdym udanym odczycie. Zmienne żyroskopu to

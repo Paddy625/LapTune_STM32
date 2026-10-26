@@ -58,14 +58,8 @@ static int16_t signed_le16(const uint8_t *bytes)
     return value < 0x8000U ? (int16_t)value : (int16_t)((int32_t)value - 65536);
 }
 
-LSM6DS3_ReadResult LSM6DS3_ReadSample(LSM6DS3_Sample *sample)
+static LSM6DS3_Sample decode(const uint8_t raw[12])
 {
-    uint8_t status = 0, raw[12] = {0};
-    if (sample == NULL || !read_regs(LSM6DS3_STATUS_REG, &status, 1U))
-        return LSM6DS3_READ_ERROR;
-    if ((status & LSM6DS3_DATA_READY) != LSM6DS3_DATA_READY)
-        return LSM6DS3_READ_NOT_READY;
-    if (!read_regs(LSM6DS3_OUTX_L_G, raw, sizeof(raw))) return LSM6DS3_READ_ERROR;
     LSM6DS3_Sample next = {
         .ax = signed_le16(raw+6) * LSM6DS3_ACCEL_G_LSB,
         .ay = signed_le16(raw+8) * LSM6DS3_ACCEL_G_LSB,
@@ -74,6 +68,44 @@ LSM6DS3_ReadResult LSM6DS3_ReadSample(LSM6DS3_Sample *sample)
         .gy = signed_le16(raw+2) * LSM6DS3_GYRO_DPS_LSB,
         .gz = signed_le16(raw+4) * LSM6DS3_GYRO_DPS_LSB
     };
-    *sample = next;
+    return next;
+}
+
+LSM6DS3_ReadResult LSM6DS3_ReadSample(LSM6DS3_Sample *sample)
+{
+    uint8_t status = 0, raw[12] = {0};
+    if (sample == NULL || !read_regs(LSM6DS3_STATUS_REG, &status, 1U))
+        return LSM6DS3_READ_ERROR;
+    if ((status & LSM6DS3_DATA_READY) != LSM6DS3_DATA_READY)
+        return LSM6DS3_READ_NOT_READY;
+    if (!read_regs(LSM6DS3_OUTX_L_G, raw, sizeof(raw))) return LSM6DS3_READ_ERROR;
+    *sample = decode(raw);
+    return LSM6DS3_READ_OK;
+}
+
+uint8_t LSM6DS3_EnableFIFO(void)
+{
+    /* Bypass first, both sources without decimation, no auxiliary datasets. */
+    uint8_t check=0;
+    return write_reg(0x0A,0) && write_reg(0x06,0) && write_reg(0x07,0) &&
+           write_reg(0x08,0x09) && write_reg(0x09,0) && write_reg(0x0A,0x26) &&
+           read_regs(0x0A,&check,1) && check==0x26;
+}
+
+LSM6DS3_ReadResult LSM6DS3_ReadFIFO(LSM6DS3_Sample *sample,uint16_t *pending)
+{
+    uint8_t state[4]={0}, verify[2]={0}, raw[12]={0};
+    if (!sample || !pending || !read_regs(0x3A,state,4) || !read_regs(0x3A,verify,2))
+        return LSM6DS3_READ_ERROR;
+    if ((state[1]|verify[1]) & 0x40U) return LSM6DS3_READ_OVERFLOW;
+    uint16_t words=state[0] | ((uint16_t)(state[1]&15U)<<8);
+    uint16_t second=verify[0] | ((uint16_t)(verify[1]&15U)<<8);
+    /* Taking the smaller count avoids an overestimate at a 255->256 transition. */
+    if (second<words) words=second;
+    *pending=words/6U;
+    if (!*pending) return LSM6DS3_READ_NOT_READY;
+    if (state[2] || (state[3]&3U)) return LSM6DS3_READ_ERROR; /* Lost pattern alignment. */
+    if (!read_regs(0x3E,raw,sizeof(raw))) return LSM6DS3_READ_ERROR;
+    *sample=decode(raw);
     return LSM6DS3_READ_OK;
 }

@@ -26,6 +26,9 @@
 #include "acc_display.h"
 #include "gps.h"
 #include "gps_display.h"
+#include "sd_spi.h"
+#include "sd_logger.h"
+#include <stdio.h>
 
 /* USER CODE END Includes */
 
@@ -56,7 +59,8 @@ UART_HandleTypeDef huart3;
 float ax, max_x=0, min_x=0, ay, max_y=0, min_y=0, az, max_z=0, min_z=0;
 float gx, min_gx=0, max_gx=0, gy, min_gy=0, max_gy=0, gz, min_gz=0, max_gz=0;
 static uint8_t sensor_ok, have_sample;
-static uint32_t last_sample, last_sensor_retry;
+static uint32_t last_sensor_retry, last_sensor_data;
+static uint8_t app_ready;
 
 /* USER CODE END PV */
 
@@ -73,6 +77,71 @@ static void MX_SPI2_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static void ServiceAcquisition(void)
+{
+  if (!app_ready) return;
+  GPS_Process(HAL_GetTick());
+  LogClock_Update(GPS_GetData());
+  if (!sensor_ok) return;
+  for (unsigned n=0; n<32; ++n) {
+    LSM6DS3_Sample sample;
+    uint16_t pending=0;
+    LSM6DS3_ReadResult result=LSM6DS3_ReadFIFO(&sample,&pending);
+    if (result==LSM6DS3_READ_NOT_READY) {
+      if ((uint32_t)(HAL_GetTick()-last_sensor_data)>=1000U) {
+        sensor_ok=0; SDLogger_DataLoss();
+      }
+      break;
+    }
+    if (result!=LSM6DS3_READ_OK) {
+      sensor_ok=0; SDLogger_DataLoss(); break;
+    }
+    last_sensor_data=HAL_GetTick();
+    uint32_t sample_ms=HAL_GetTick()-(uint32_t)(pending-1U)*1000U/104U;
+    ax=sample.ax; ay=sample.ay; az=sample.az;
+    gx=sample.gx; gy=sample.gy; gz=sample.gz;
+    if (!have_sample) {
+      min_x=max_x=ax; min_y=max_y=ay; min_z=max_z=az;
+      min_gx=max_gx=gx; min_gy=max_gy=gy; min_gz=max_gz=gz;
+      have_sample=1;
+    }
+    if (ax>max_x) max_x=ax;
+    if (ax<min_x) min_x=ax;
+    if (ay>max_y) max_y=ay;
+    if (ay<min_y) min_y=ay;
+    if (az>max_z) max_z=az;
+    if (az<min_z) min_z=az;
+    if (gx>max_gx) max_gx=gx;
+    if (gx<min_gx) min_gx=gx;
+    if (gy>max_gy) max_gy=gy;
+    if (gy<min_gy) min_gy=gy;
+    if (gz>max_gz) max_gz=gz;
+    if (gz<min_gz) min_gz=gz;
+    SDLogger_Append(&sample,LogClock_At(sample_ms));
+  }
+}
+
+void SD_SPI_Service(void) { ServiceAcquisition(); }
+
+static HAL_StatusTypeDef ShowLogState(void)
+{
+  static int previous=-1;
+  if ((int)sd_log_state==previous) return HAL_OK;
+  char text[32];
+  const char *label="SD OFF";
+  switch (sd_log_state) {
+  case LOG_RECORDING: label="SD REC"; break;
+  case LOG_STOPPED: label="SD SAVED"; break;
+  case LOG_CARD_ERROR: label="SD ERROR"; break;
+  case LOG_FULL: label="SD FULL"; break;
+  case LOG_DATA_LOSS: label="SD DATA LOSS"; break;
+  default: break;
+  }
+  (void)snprintf(text,sizeof(text),"%-12s%-12s",label,sd_log_filename);
+  previous=(int)sd_log_state;
+  return TFT_Text(4,120,text,1,sd_log_state==LOG_RECORDING || sd_log_state==LOG_STOPPED ? TFT_WHITE : TFT_RED,TFT_BLACK);
+}
+
 
 /* USER CODE END 0 */
 
@@ -116,8 +185,12 @@ int main(void)
   }
   if (GPS_Init(&huart3) != HAL_OK) Error_Handler();
   sensor_ok = LSM6DS3_Init();
-  last_sample = HAL_GetTick();
-  last_sensor_retry = last_sample;
+  HAL_Delay(100U); /* Let gyro/accelerometer settle before enabling FIFO. */
+  if (sensor_ok) sensor_ok=LSM6DS3_EnableFIFO();
+  last_sensor_retry=last_sensor_data=HAL_GetTick();
+  app_ready=1;
+  SD_SPI_Bind(&hspi1);
+  SDLogger_Start();
 
   /* USER CODE END 2 */
 
@@ -128,39 +201,15 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    uint32_t now = HAL_GetTick();
-    GPS_Process(now);
-    if (!sensor_ok && (uint32_t)(now - last_sensor_retry) >= 1000U) {
-      sensor_ok = LSM6DS3_Init();
-      last_sensor_retry = now;
+    uint32_t now=HAL_GetTick();
+    ServiceAcquisition();
+    if (!sensor_ok && (uint32_t)(now-last_sensor_retry)>=1000U) {
+      sensor_ok=LSM6DS3_Init();
+      HAL_Delay(100U);
+      if (sensor_ok) sensor_ok=LSM6DS3_EnableFIFO();
+      last_sensor_retry=last_sensor_data=HAL_GetTick();
     }
-    if (sensor_ok && (uint32_t)(now - last_sample) >= 10U) {
-      last_sample = now;
-      LSM6DS3_Sample sample;
-      LSM6DS3_ReadResult result = LSM6DS3_ReadSample(&sample);
-      if (result == LSM6DS3_READ_ERROR) sensor_ok = 0U;
-      if (result == LSM6DS3_READ_OK) {
-        ax = sample.ax; ay = sample.ay; az = sample.az;
-        gx = sample.gx; gy = sample.gy; gz = sample.gz;
-        if (!have_sample) {
-          min_x = max_x = ax; min_y = max_y = ay; min_z = max_z = az;
-          min_gx = max_gx = gx; min_gy = max_gy = gy; min_gz = max_gz = gz;
-          have_sample = 1U;
-        }
-        if (ax > max_x) max_x = ax;
-        if (ax < min_x) min_x = ax;
-        if (ay > max_y) max_y = ay;
-        if (ay < min_y) min_y = ay;
-        if (az > max_z) max_z = az;
-        if (az < min_z) min_z = az;
-        if (gx > max_gx) max_gx = gx;
-        if (gx < min_gx) min_gx = gx;
-        if (gy > max_gy) max_gy = gy;
-        if (gy < min_gy) min_gy = gy;
-        if (gz > max_gz) max_gz = gz;
-        if (gz < min_gz) min_gz = gz;
-      }
-    }
+    SDLogger_Process(HAL_GetTick());
     const IMU_DisplayData readings = {
       .accel = {ax, ay, az},
       .accel_min = {min_x, min_y, min_z},
@@ -176,6 +225,7 @@ int main(void)
     if (GPSDisplay_Update(HAL_GetTick(), GPS_GetData()) != HAL_OK) {
       Error_Handler();
     }
+    if (ShowLogState()!=HAL_OK) Error_Handler();
     HAL_Delay(1U);
   }
   /* USER CODE END 3 */
@@ -348,6 +398,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(TFT_DC_GPIO_Port, TFT_DC_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(TFT_RST_GPIO_Port, TFT_RST_Pin, GPIO_PIN_SET);
   HAL_GPIO_WritePin(TFT_CS_GPIO_Port, TFT_CS_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(SD_CS_GPIO_Port, SD_CS_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET);
@@ -366,7 +417,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure TFT CS (PB6) and LSM6DS3 CS (PB12), both inactive high. */
-  GPIO_InitStruct.Pin = GPIO_PIN_12|TFT_CS_Pin;
+  GPIO_InitStruct.Pin = GPIO_PIN_12|TFT_CS_Pin|SD_CS_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -382,6 +433,12 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_GPIO_EXTI_Callback(uint16_t pin)
+{
+  /* The Nucleo B1 release edge requests a foreground flush/close, even during SD I/O. */
+  if (pin==B1_Pin) SDLogger_RequestStop();
+}
+
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *uart)
 {
   GPS_OnRxComplete(uart);

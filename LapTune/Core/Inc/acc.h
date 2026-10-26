@@ -35,7 +35,8 @@ typedef struct {
 typedef enum {
     LSM6DS3_READ_ERROR = 0,
     LSM6DS3_READ_OK = 1,
-    LSM6DS3_READ_NOT_READY = 2
+    LSM6DS3_READ_NOT_READY = 2,
+    LSM6DS3_READ_OVERFLOW = 3
 } LSM6DS3_ReadResult;
 
 extern SPI_HandleTypeDef hspi2;
@@ -43,5 +44,8 @@ extern SPI_HandleTypeDef hspi2;
 uint8_t LSM6DS3_Init(void);
 /* One burst reads gyro XYZ then accel XYZ. Failure/not-ready preserves *sample. */
 LSM6DS3_ReadResult LSM6DS3_ReadSample(LSM6DS3_Sample *sample);
+uint8_t LSM6DS3_EnableFIFO(void);
+/* FIFO contains gyro XYZ / accel XYZ at 104 Hz; pending includes this sample. */
+LSM6DS3_ReadResult LSM6DS3_ReadFIFO(LSM6DS3_Sample *sample, uint16_t *pending);
 
 #endif

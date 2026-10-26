@@ -36,9 +36,15 @@ static uint8_t utc(const char *s, GPS_Data *out)
     if (strlen(s) < 6U || !pair(s, &out->hour) || !pair(s+2, &out->minute) ||
         !pair(s+4, &out->second)) return 0;
     if (out->hour > 23U || out->minute > 59U || out->second > 60U) return 0;
+    out->millisecond=0;
     if (s[6] == '\0') return 1;
     if (s[6] != '.' || s[7] == '\0') return 0;
-    for (s += 7; *s; ++s) if (*s < '0' || *s > '9') return 0;
+    uint16_t factor=100;
+    for (s += 7; *s; ++s) {
+        if (*s < '0' || *s > '9') return 0;
+        out->millisecond += (uint16_t)(*s-'0')*factor;
+        factor/=10;
+    }
     return 1;
 }
 

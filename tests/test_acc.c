@@ -44,9 +44,12 @@ HAL_StatusTypeDef HAL_SPI_Receive(SPI_HandleTypeDef *spi, uint8_t *data,
         return HAL_TIMEOUT;
     }
     if (len == 12) {
-        assert(read_command == 0xA2); /* READ, no LIS3DH MULTI bit. */
+        assert(read_command == 0xA2 || read_command == 0xBE);
         assert(registers[0x12] & 4); /* IF_INC is required for the 12-byte burst. */
         memcpy(data, sample_bytes, 12); bursts++;
+        if (read_command==0xBE) registers[0x3A]-=6;
+    } else if (last_reg==0x3A) {
+        assert(len==2 || len==4); memcpy(data,registers+0x3A,len);
     } else {
         assert(len == 1);
         if (last_reg == 0x12 && (registers[0x12] & 1) && !stuck_reset) {
@@ -108,5 +111,18 @@ int main(void)
     assert(!LSM6DS3_Init() && !selected);
     reset_mock(); fail_rx_at=1;
     assert(!LSM6DS3_Init() && !selected);
+    reset_mock(); assert(LSM6DS3_Init() && LSM6DS3_EnableFIFO());
+    assert(registers[8]==9 && registers[9]==0 && registers[10]==0x26);
+    uint16_t pending=99;
+    assert(LSM6DS3_ReadFIFO(&s,&pending)==LSM6DS3_READ_NOT_READY && pending==0);
+    registers[0x3A]=12;
+    assert(LSM6DS3_ReadFIFO(&s,&pending)==LSM6DS3_READ_OK && pending==2);
+    assert(registers[0x3A]==6 && fabsf(s.gx-70)<0.0001f);
+    old=s; registers[0x3B]=0x40;
+    assert(LSM6DS3_ReadFIFO(&s,&pending)==LSM6DS3_READ_OVERFLOW); unchanged(&s,&old);
+    registers[0x3B]=0; registers[0x3C]=1;
+    assert(LSM6DS3_ReadFIFO(&s,&pending)==LSM6DS3_READ_ERROR); unchanged(&s,&old);
+    registers[0x3C]=0; fail_rx_at=receive_calls+3;
+    assert(LSM6DS3_ReadFIFO(&s,&pending)==LSM6DS3_READ_ERROR); unchanged(&s,&old);
     puts("PASS LSM6DS3: identity/reset/config, ready flags, 6-axis burst/scaling, signed limits, SPI errors preserve sample");
 }
