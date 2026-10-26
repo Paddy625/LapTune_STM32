@@ -116,6 +116,30 @@ static uint8_t altitude(const char *s, int32_t *out)
     return 1;
 }
 
+static uint8_t speed(const char *s, uint32_t *out)
+{
+    /* Unsigned knots, at most 9999.999999; validate any further decimal digits.
+       1 knot = 1.852 km/h. Round the result to 0.001 km/h without float I/O. */
+    uint32_t whole=0, fraction=0, factor=100000U;
+    if (*s<'0' || *s>'9') return 0;
+    while (*s>='0' && *s<='9') {
+        uint32_t digit=(uint32_t)(*s++-'0');
+        if (whole>(9999U-digit)/10U) return 0;
+        whole=whole*10U+digit;
+    }
+    if (*s=='.') {
+        if (*++s=='\0') return 0;
+        for (;*s;++s) {
+            if (*s<'0' || *s>'9') return 0;
+            fraction+=(uint32_t)(*s-'0')*factor; factor/=10U;
+        }
+    }
+    if (*s!='\0') return 0;
+    uint64_t microknots=(uint64_t)whole*1000000U+fraction;
+    *out=(uint32_t)((microknots*1852U+500000U)/1000000U);
+    return 1;
+}
+
 void GPS_NMEA_Init(GPS_Data *data) { memset(data, 0, sizeof(*data)); }
 
 uint8_t GPS_NMEA_Parse(GPS_Data *data, const char *line, uint32_t now)
@@ -147,13 +171,18 @@ uint8_t GPS_NMEA_Parse(GPS_Data *data, const char *line, uint32_t now)
     if (!strcmp(f[0]+2, "RMC")) {
         if (count < 10U || strlen(f[2]) != 1U || (*f[2] != 'A' && *f[2] != 'V')) return 0;
         if (*f[2] == 'V') {
-            next.position_valid = next.altitude_valid = next.datetime_valid = 0;
+            next.position_valid = next.altitude_valid = next.datetime_valid = next.speed_valid = 0;
         } else {
             if (!utc(f[1], &next) || !date(f[9], &next) ||
                 !coordinate(f[3], f[4], 1, &next.latitude_e7) ||
                 !coordinate(f[5], f[6], 0, &next.longitude_e7)) return 0;
             next.position_valid = next.datetime_valid = 1;
             next.position_ms = next.datetime_ms = now;
+            next.speed_valid=0;
+            if (*f[7]!='\0') {
+                if (!speed(f[7],&next.speed_millikmh)) return 0;
+                next.speed_valid=1; next.speed_ms=now;
+            }
         }
     } else if (!strcmp(f[0]+2, "GGA")) {
         uint32_t quality, satellites;
@@ -161,7 +190,7 @@ uint8_t GPS_NMEA_Parse(GPS_Data *data, const char *line, uint32_t now)
             !number(f[7], 99U, &satellites)) return 0;
         next.fix_quality = (uint8_t)quality; next.satellites = (uint8_t)satellites;
         if (quality == 0U) {
-            next.position_valid = next.altitude_valid = 0;
+            next.position_valid = next.altitude_valid = next.speed_valid = 0;
         } else {
             if (!coordinate(f[2], f[3], 1, &next.latitude_e7) ||
                 !coordinate(f[4], f[5], 0, &next.longitude_e7)) return 0;
@@ -186,4 +215,5 @@ void GPS_NMEA_Expire(GPS_Data *data, uint32_t now)
     if ((uint32_t)(now-data->position_ms) >= GPS_FRESH_MS) data->position_valid = 0;
     if ((uint32_t)(now-data->altitude_ms) >= GPS_FRESH_MS) data->altitude_valid = 0;
     if ((uint32_t)(now-data->datetime_ms) >= GPS_FRESH_MS) data->datetime_valid = 0;
+    if ((uint32_t)(now-data->speed_ms) >= GPS_FRESH_MS) data->speed_valid = 0;
 }

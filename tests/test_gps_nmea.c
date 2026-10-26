@@ -10,11 +10,44 @@ static uint8_t parse(GPS_Data *data, const char *body, uint32_t now)
     snprintf(line, sizeof(line), "$%s*%02X\r\n", body, checksum);
     return GPS_NMEA_Parse(data, line, now);
 }
+static void test_speed(void)
+{
+    GPS_Data data; GPS_NMEA_Init(&data);
+    assert(parse(&data,"GPRMC,123456,A,5213.782,N,02100.732,E,22.4,0,261026,,,A",1000));
+    assert(data.speed_valid && data.speed_millikmh==41485 && data.speed_ms==1000);
+    GPS_Data previous=data;
+    const char *invalid[]={"-1","+1","nan","inf","1e3","1.","1.2.3","10000","999999999999999999"};
+    for (unsigned i=0;i<sizeof(invalid)/sizeof(invalid[0]);++i) {
+        char body[160]; snprintf(body,sizeof(body),"GPRMC,123457,A,5213.782,N,02100.732,E,%s,0,261026",invalid[i]);
+        assert(!parse(&data,body,1001) && !memcmp(&data,&previous,sizeof(data)));
+    }
+    assert(parse(&data,"GNRMC,123457,A,5213.782,N,02100.732,E,1.25,0,261026",1002));
+    assert(data.speed_valid && data.speed_millikmh==2315);
+    assert(parse(&data,"GPRMC,123457,A,5213.782,N,02100.732,E,0.001,0,261026",1003));
+    assert(data.speed_valid && data.speed_millikmh==2);
+    assert(parse(&data,"GPRMC,123457,A,5213.782,N,02100.732,E,12.3456789,0,261026",1004));
+    assert(data.speed_millikmh==22864);
+    assert(parse(&data,"GPRMC,123457,A,5213.782,N,02100.732,E,9999.999999,0,261026",1005));
+    assert(data.speed_millikmh==18520000);
+    assert(parse(&data,"GPRMC,123457,A,5213.782,N,02100.732,E,,0,261026",1006));
+    assert(data.position_valid && data.datetime_valid && !data.speed_valid);
+    assert(parse(&data,"GPRMC,123457,A,5213.782,N,02100.732,E,0.0,0,261026",1007));
+    assert(data.speed_valid && data.speed_millikmh==0);
+    assert(parse(&data,"GPGGA,123458,,,,,0,00,99.99,,,,,,",1008));
+    assert(!data.speed_valid && !data.position_valid);
+    assert(parse(&data,"GPRMC,123457,A,5213.782,N,02100.732,E,10,0,261026",1010));
+    assert(parse(&data,"GPRMC,123458,V,,,,,,,261026,,,N",1011));
+    assert(!data.speed_valid && !data.position_valid);
+    assert(parse(&data,"GPRMC,123457,A,5213.782,N,02100.732,E,10,0,261026",2000));
+    assert(parse(&data,"GPGGA,123459,5213.782,N,02100.732,E,1,08,1,100,M",4999));
+    GPS_NMEA_Expire(&data,4999); assert(data.speed_valid && data.position_valid);
+    GPS_NMEA_Expire(&data,5000); assert(!data.speed_valid && data.position_valid && data.connected);
+}
 int main(void)
 {
     GPS_Data data;
     GPS_NMEA_Init(&data);
-    assert(!data.connected && !data.position_valid && !data.datetime_valid);
+    assert(!data.connected && !data.position_valid && !data.datetime_valid && !data.speed_valid);
     assert(GPS_NMEA_Parse(&data, "$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47", 100));
     assert(data.latitude_e7 == 481173000 && data.longitude_e7 == 115166667);
     assert(data.altitude_mm == 545400 && data.altitude_valid && data.satellites == 8);
@@ -58,10 +91,11 @@ int main(void)
     assert(parse(&data, "GPGGA,123519,4807.038,N,01131.000,E,1,08,1,100,M", start));
     assert(parse(&data, "GPRMC,123519,A,4807.038,N,01131.000,E,0,0,201026", start+1U));
     GPS_NMEA_Expire(&data, 1998U);
-    assert(data.position_valid && data.altitude_valid && data.datetime_valid);
+    assert(data.position_valid && data.altitude_valid && data.datetime_valid && data.speed_valid);
     GPS_NMEA_Expire(&data, 1999U);
     assert(!data.altitude_valid && data.position_valid);
     GPS_NMEA_Expire(&data, 2000U);
-    assert(!data.connected && !data.position_valid && !data.datetime_valid);
-    puts("PASS NMEA: checksums, GP/GN, coordinates, MSL altitude, UTC/date, no fix, invalid input, expiry/wrap");
+    assert(!data.connected && !data.position_valid && !data.datetime_valid && !data.speed_valid);
+    test_speed();
+    puts("PASS NMEA: checksums, coordinates/MSL/UTC, RMC speed in km/h, zero/missing/invalid speed, fix loss and independent expiry/wrap");
 }

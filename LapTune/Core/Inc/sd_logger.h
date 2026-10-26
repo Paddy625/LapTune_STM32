@@ -12,7 +12,8 @@ extern volatile uint32_t sd_log_written, sd_log_dropped;
 extern volatile unsigned sd_log_error;
 extern char sd_log_filename[13];
 void SDLogger_Start(void);
-void SDLogger_Append(const LSM6DS3_Sample *sample,LogTime time);
+/* Copy the current GPS fix into this record; NULL leaves GPS columns empty. */
+void SDLogger_Append(const LSM6DS3_Sample *sample,LogTime time,const GPS_Data *gps);
 void SDLogger_Process(uint32_t now);
 void SDLogger_RequestStop(void);
 void SDLogger_RequestResume(void);

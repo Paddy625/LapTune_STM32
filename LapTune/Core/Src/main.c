@@ -118,7 +118,7 @@ static void ServiceAcquisition(void)
     if (gy<min_gy) min_gy=gy;
     if (gz>max_gz) max_gz=gz;
     if (gz<min_gz) min_gz=gz;
-    SDLogger_Append(&sample,LogClock_At(sample_ms));
+    SDLogger_Append(&sample,LogClock_At(sample_ms),GPS_GetData());
   }
 }
 

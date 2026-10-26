@@ -16,7 +16,7 @@ cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
 "$test_build/log_clock"
 cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -DFF_USE_MKFS=1 \
    -Itests/stubs -ILapTune/Core/Inc -ILapTune/Core/FatFs \
-   tests/test_sd_logger.c LapTune/Core/Src/sd_logger.c LapTune/Core/Src/log_clock.c \
+   tests/test_sd_logger.c LapTune/Core/Src/sd_logger.c LapTune/Core/Src/log_clock.c LapTune/Core/Src/gps_nmea.c \
    LapTune/Core/FatFs/ff.c -o "$test_build/sd_logger"
 "$test_build/sd_logger"
 cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -g \

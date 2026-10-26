@@ -36,7 +36,7 @@ DRESULT disk_write(BYTE p,const BYTE *in,LBA_t at,UINT n)
     if (write_error || no_card) { medium_status=STA_NOINIT; return RES_ERROR; }
     memcpy(image+at*512,in,n*512);
     if (inject) {
-        inject=0; LSM6DS3_Sample s={1,2,3,4,5,6}; LogTime t={0}; SDLogger_Append(&s,t);
+        inject=0; LSM6DS3_Sample s={1,2,3,4,5,6}; LogTime t={0}; SDLogger_Append(&s,t,NULL);
     }
     return RES_OK;
 }
@@ -77,7 +77,7 @@ static char *read_log(const char *name,unsigned rows)
         char *end=strstr(p,"\r\n"); assert(end);
         unsigned columns=0;
         for (char *q=p;q<end;++q) if (*q==';') ++columns;
-        assert(columns==8); ++lines; p=end+2;
+        assert(columns==11); ++lines; p=end+2;
     }
     assert(lines==rows+1U);
     return text;
@@ -87,7 +87,7 @@ static void test_automatic_rotation(void)
     fresh_card(5000); SDLogger_Start();
     assert(sd_log_state==LOG_RECORDING && !strcmp(sd_log_filename,"LOG0001.TXT"));
     LSM6DS3_Sample s={1,2,3,4,5,6}; LogTime t={0};
-    for (unsigned n=0;n<100;++n) SDLogger_Append(&s,t);
+    for (unsigned n=0;n<100;++n) SDLogger_Append(&s,t,NULL);
     tick+=SD_LOG_FILE_DURATION_MS-1U; SDLogger_Process(tick);
     assert(!strcmp(sd_log_filename,"LOG0001.TXT"));
     /* The boundary spans multiple writes; a callback enqueues into the next file. */
@@ -96,7 +96,7 @@ static void test_automatic_rotation(void)
     assert(sd_log_state==LOG_RECORDING && !strcmp(sd_log_filename,"LOG0002.TXT"));
     assert(sd_log_written==100 && !sd_log_dropped);
     char *first=read_log("LOG0001.TXT",100);
-    assert(strstr(first,"100;;;1.000000;2.000000;3.000000;4.000;5.000;6.000\r\n"));
+    assert(strstr(first,"100;;;1.000000;2.000000;3.000000;4.000;5.000;6.000;;;\r\n"));
     assert(!strstr(first,"101;;;"));
     uint32_t second_start=tick;
     SDLogger_Process(tick); assert(sd_log_written==101);
@@ -113,7 +113,7 @@ static void test_automatic_rotation(void)
 static void append_and_stop(void)
 {
     LSM6DS3_Sample s={1,2,3,4,5,6}; LogTime t={0};
-    SDLogger_Append(&s,t); SDLogger_RequestStop();
+    SDLogger_Append(&s,t,NULL); SDLogger_RequestStop();
 }
 static void test_stop_and_tick_wrap(void)
 {
@@ -121,7 +121,7 @@ static void test_stop_and_tick_wrap(void)
     LSM6DS3_Sample s={1,2,3,4,5,6}; LogTime t={0};
     tick+=SD_LOG_FILE_DURATION_MS-1U; SDLogger_Process(tick);
     assert(!strcmp(sd_log_filename,"LOG0001.TXT"));
-    ++tick; SDLogger_Append(&s,t); on_sync=append_and_stop; SDLogger_Process(tick);
+    ++tick; SDLogger_Append(&s,t,NULL); on_sync=append_and_stop; SDLogger_Process(tick);
     /* Stop during close must preserve a sample that was already queued for file 2. */
     assert(sd_log_state==LOG_RECORDING && !strcmp(sd_log_filename,"LOG0002.TXT"));
     SDLogger_Process(tick); assert(sd_log_state==LOG_STOPPED && sd_log_written==2);
@@ -129,7 +129,7 @@ static void test_stop_and_tick_wrap(void)
     text=read_log("LOG0002.TXT",1); assert(strstr(text,"2;;;")); free(text);
 
     fresh_card(0); SDLogger_Start();
-    for (unsigned n=0;n<100;++n) SDLogger_Append(&s,t);
+    for (unsigned n=0;n<100;++n) SDLogger_Append(&s,t,NULL);
     tick=SD_LOG_FILE_DURATION_MS; SDLogger_Process(tick); SDLogger_RequestStop();
     for (unsigned n=0;n<100 && sd_log_state==LOG_RECORDING;++n) SDLogger_Process(tick);
     assert(sd_log_state==LOG_STOPPED && sd_log_written==100);
@@ -140,7 +140,7 @@ static void remove_card(void) { no_card=1; }
 static void test_rotation_error(void)
 {
     fresh_card(0); SDLogger_Start();
-    LSM6DS3_Sample s={1,2,3,4,5,6}; LogTime t={0}; SDLogger_Append(&s,t);
+    LSM6DS3_Sample s={1,2,3,4,5,6}; LogTime t={0}; SDLogger_Append(&s,t,NULL);
     tick=SD_LOG_FILE_DURATION_MS; on_sync=remove_card; SDLogger_Process(tick);
     assert(sd_log_state==LOG_CARD_ERROR && sd_log_written==1);
     assert(!strcmp(sd_log_filename,"LOG0001.TXT"));
@@ -151,11 +151,11 @@ static void test_rotation_error(void)
 static void test_sync_and_restart(void)
 {
     fresh_card(0); SDLogger_Start();
-    LSM6DS3_Sample s={1,2,3,4,5,6}; LogTime t={0}; SDLogger_Append(&s,t);
+    LSM6DS3_Sample s={1,2,3,4,5,6}; LogTime t={0}; SDLogger_Append(&s,t,NULL);
     unsigned before=sync_calls; SDLogger_Process(tick);
     tick=SD_LOG_SYNC_INTERVAL_MS-1U; SDLogger_Process(tick); assert(sync_calls==before);
     ++tick; SDLogger_Process(tick); assert(sync_calls==before+1U);
-    SDLogger_Append(&s,t); ++tick; SDLogger_Process(tick);
+    SDLogger_Append(&s,t,NULL); ++tick; SDLogger_Process(tick);
     /* Simulate losing the RAM cache: unmount without f_close, then reboot/mount.
        This checks FatFs metadata persistence, not electrical power-fail behaviour. */
     assert(f_mount(NULL,"",0)==FR_OK); SDLogger_Start();
@@ -185,21 +185,21 @@ static void test_auto_retry_and_reinsert(void)
 {
     fresh_card(0); no_card=1; SDLogger_Start(); assert(sd_log_state==LOG_CARD_ERROR);
     unsigned attempts=init_calls;
-    LSM6DS3_Sample s={1,2,3,4,5,6}; LogTime t={0}; SDLogger_Append(&s,t);
+    LSM6DS3_Sample s={1,2,3,4,5,6}; LogTime t={0}; SDLogger_Append(&s,t,NULL);
     tick=SD_LOG_RETRY_INTERVAL_MS-1U; SDLogger_Process(tick); assert(init_calls==attempts);
     ++tick; SDLogger_Process(tick); assert(init_calls==attempts+1U && sd_log_state==LOG_CARD_ERROR);
     no_card=0; tick+=SD_LOG_RETRY_INTERVAL_MS-1U; SDLogger_Process(tick); assert(init_calls==attempts+1U);
     ++tick; SDLogger_Process(tick); assert(sd_log_state==LOG_RECORDING && init_calls==attempts+2U);
     assert(!strcmp(sd_log_filename,"LOG0001.TXT"));
-    SDLogger_Append(&s,t); SDLogger_Process(tick);
+    SDLogger_Append(&s,t,NULL); SDLogger_Process(tick);
     tick+=SD_LOG_SYNC_INTERVAL_MS; SDLogger_Process(tick); /* Persist sample 2. */
-    SDLogger_Append(&s,t); no_card=1;
+    SDLogger_Append(&s,t,NULL); no_card=1;
     tick+=SD_LOG_SYNC_INTERVAL_MS; SDLogger_Process(tick);
     assert(sd_log_state==LOG_CARD_ERROR);
-    SDLogger_Append(&s,t); /* Sample 4 arrives while card is absent. */
+    SDLogger_Append(&s,t,NULL); /* Sample 4 arrives while card is absent. */
     no_card=0; tick+=SD_LOG_RETRY_INTERVAL_MS; SDLogger_Process(tick);
     assert(sd_log_state==LOG_RECORDING && !strcmp(sd_log_filename,"LOG0002.TXT"));
-    SDLogger_Append(&s,t); SDLogger_Process(tick); SDLogger_RequestStop(); SDLogger_Process(tick);
+    SDLogger_Append(&s,t,NULL); SDLogger_Process(tick); SDLogger_RequestStop(); SDLogger_Process(tick);
     assert(sd_log_state==LOG_STOPPED && sd_log_dropped>=2);
     char *text=read_log("LOG0001.TXT",1); assert(strstr(text,"2;;;")); free(text);
     text=read_log("LOG0002.TXT",1); assert(strstr(text,"5;;;") && !strstr(text,"4;;;")); free(text);
@@ -208,9 +208,9 @@ static void test_retry_different_card(void)
 {
     fresh_card(0); SDLogger_Start();
     LSM6DS3_Sample s={1,2,3,4,5,6}; LogTime t={0};
-    SDLogger_Append(&s,t); SDLogger_Process(tick);
+    SDLogger_Append(&s,t,NULL); SDLogger_Process(tick);
     tick+=SD_LOG_SYNC_INTERVAL_MS; SDLogger_Process(tick);
-    SDLogger_Append(&s,t); no_card=1;
+    SDLogger_Append(&s,t,NULL); no_card=1;
     tick+=SD_LOG_SYNC_INTERVAL_MS; SDLogger_Process(tick); assert(sd_log_state==LOG_CARD_ERROR);
     unsigned char *first_card=image;
     image=calloc(SECTORS,512); assert(image); fresh_card(tick);
@@ -220,7 +220,7 @@ static void test_retry_different_card(void)
     assert(f_write(&f,"second card",11,&done)==FR_OK && done==11); assert(f_close(&f)==FR_OK);
     tick+=SD_LOG_RETRY_INTERVAL_MS; SDLogger_Process(tick);
     assert(sd_log_state==LOG_RECORDING && !strcmp(sd_log_filename,"LOG0002.TXT"));
-    SDLogger_Append(&s,t); SDLogger_Process(tick); SDLogger_RequestStop(); SDLogger_Process(tick);
+    SDLogger_Append(&s,t,NULL); SDLogger_Process(tick); SDLogger_RequestStop(); SDLogger_Process(tick);
     char *text=read_log("LOG0002.TXT",1); assert(strstr(text,"3;;;") && !strstr(text,"2;;;")); free(text);
     assert(f_open(&f,"LOG0001.TXT",FA_READ)==FR_OK); char marker[12]={0};
     assert(f_read(&f,marker,11,&done)==FR_OK && !strcmp(marker,"second card")); assert(f_close(&f)==FR_OK);
@@ -249,7 +249,7 @@ static void test_button_pause_resume(void)
 
     fresh_card(0); no_card=1; SDLogger_Start(); no_card=0; on_init=SDLogger_RequestStop;
     tick+=SD_LOG_RETRY_INTERVAL_MS; SDLogger_Process(tick); /* B1 during a mount. */
-    LSM6DS3_Sample s={1,2,3,4,5,6}; LogTime t={0}; SDLogger_Append(&s,t);
+    LSM6DS3_Sample s={1,2,3,4,5,6}; LogTime t={0}; SDLogger_Append(&s,t,NULL);
     SDLogger_Process(tick); assert(sd_log_state==LOG_STOPPED && !sd_log_written);
     free(read_log("LOG0001.TXT",0));
 }
@@ -261,15 +261,76 @@ static void test_retry_wrap_and_acquisition_fault(void)
     no_card=0; ++tick; SDLogger_Process(tick); assert(sd_log_state==LOG_RECORDING && init_calls==attempts+1U);
     SDLogger_DataLoss(); SDLogger_Process(tick); assert(sd_log_state==LOG_DATA_LOSS);
     attempts=init_calls; tick+=SD_LOG_RETRY_INTERVAL_MS; SDLogger_Process(tick); assert(init_calls==attempts);
-    LSM6DS3_Sample s={1,2,3,4,5,6}; LogTime t={0}; SDLogger_Append(&s,t);
+    LSM6DS3_Sample s={1,2,3,4,5,6}; LogTime t={0}; SDLogger_Append(&s,t,NULL);
     SDLogger_Process(tick); assert(sd_log_state==LOG_RECORDING && init_calls==attempts+1U);
-    SDLogger_Append(&s,t); SDLogger_Process(tick);
-    SDLogger_DataLoss(); SDLogger_Append(&s,t); on_sync=delay_sync;
+    SDLogger_Append(&s,t,NULL); SDLogger_Process(tick);
+    SDLogger_DataLoss(); SDLogger_Append(&s,t,NULL); on_sync=delay_sync;
     attempts=init_calls; uint32_t before=tick;
     SDLogger_Process(tick); assert(tick==before+500U && init_calls==attempts);
     tick+=SD_LOG_RETRY_INTERVAL_MS-1U; SDLogger_Process(tick); assert(init_calls==attempts);
     ++tick; SDLogger_Process(tick); assert(sd_log_state==LOG_RECORDING && init_calls==attempts+1U);
     SDLogger_RequestStop(); SDLogger_Process(tick);
+}
+static void parse_fix(GPS_Data *gps,const char *body)
+{
+    unsigned checksum=0; char line[160];
+    for (const char *p=body;*p;++p) checksum^=(unsigned char)*p;
+    snprintf(line,sizeof(line),"$%s*%02X",body,checksum);
+    assert(GPS_NMEA_Parse(gps,line,tick));
+}
+static void expect_navigation(const char *text,unsigned row,const char *expected)
+{
+    const char *p=text;
+    for (unsigned i=0;i<row;++i) { p=strstr(p,"\r\n"); assert(p); p+=2; }
+    for (unsigned i=0;i<9;++i) { p=strchr(p,';'); assert(p); ++p; }
+    assert(!strncmp(p,expected,strlen(expected)));
+}
+static void test_navigation_log(void)
+{
+    fresh_card(1000); SDLogger_Start();
+    LSM6DS3_Sample s={0.000488f,-1,16,0.07f,-70,2000}; GPS_Data gps; GPS_NMEA_Init(&gps);
+    parse_fix(&gps,"GPRMC,123456.123,A,5213.782,N,02100.732,E,22.4,0,261026,,,A");
+    LogClock_Update(&gps); LogTime t=LogClock_At(tick);
+    SDLogger_Append(&s,t,&gps);
+    /* Change the source before writing: every queued row must retain its own fix. */
+    parse_fix(&gps,"GNRMC,123456.123,A,3456.0000,S,05822.0000,W,100,0,261026");
+    SDLogger_Append(&s,t,&gps);
+    parse_fix(&gps,"GPRMC,123456.123,A,0000.000,N,00000.000,E,0,0,261026");
+    SDLogger_Append(&s,t,&gps);
+    parse_fix(&gps,"GPRMC,123456.123,A,0000.000,N,00000.000,E,,0,261026");
+    SDLogger_Append(&s,t,&gps);
+    parse_fix(&gps,"GPGGA,123457,,,,,0,00,99.99,,,,,,"); SDLogger_Append(&s,t,&gps);
+    parse_fix(&gps,"GPRMC,123456.123,A,5213.782,N,02100.732,E,10,0,261026");
+    tick+=GPS_FRESH_MS-1U; SDLogger_Append(&s,t,&gps);
+    ++tick; SDLogger_Append(&s,t,&gps); /* Guard stale flags even without GPS_NMEA_Expire. */
+    tick=5000; parse_fix(&gps,"GPGGA,123500,4807.038,N,01131.000,E,1,08,1,100,M");
+    SDLogger_Append(&s,t,&gps); /* Fresh GGA position must not refresh old RMC speed. */
+    parse_fix(&gps,"GPRMC,123500,A,5213.782,N,02100.732,E,10,0,261026");
+    gps.position_ms=tick-GPS_FRESH_MS; SDLogger_Append(&s,t,&gps);
+    gps.connected=0; SDLogger_Append(&s,t,&gps);
+    SDLogger_RequestStop();
+    for (unsigned i=0;i<10 && sd_log_state==LOG_RECORDING;++i) SDLogger_Process(tick);
+    assert(sd_log_state==LOG_STOPPED && sd_log_written==10 && !sd_log_dropped);
+    char *text=read_log("LOG0001.TXT",10);
+    assert(strstr(text,"1;2026-10-26;12:34:56.123;0.000488;-1.000000;16.000000;0.070;-70.000;2000.000;52.2297000;21.0122000;41.485\r\n"));
+    expect_navigation(text,2,"-34.9333333;-58.3666667;185.200\r\n");
+    expect_navigation(text,3,"0.0000000;0.0000000;0.000\r\n");
+    expect_navigation(text,4,"0.0000000;0.0000000;\r\n");
+    expect_navigation(text,5,";;\r\n");
+    expect_navigation(text,6,"52.2297000;21.0122000;18.520\r\n");
+    expect_navigation(text,7,";;\r\n");
+    expect_navigation(text,8,"48.1173000;11.5166667;\r\n");
+    expect_navigation(text,9,";;18.520\r\n");
+    expect_navigation(text,10,";;\r\n"); free(text);
+
+    fresh_card(UINT32_MAX-1000U); SDLogger_Start(); GPS_NMEA_Init(&gps);
+    parse_fix(&gps,"GPRMC,123456,A,9000.000,S,18000.000,W,0,0,261026");
+    tick+=GPS_FRESH_MS-1U; SDLogger_Append(&s,t,&gps);
+    ++tick; SDLogger_Append(&s,t,&gps); SDLogger_RequestStop(); SDLogger_Process(tick);
+    assert(sd_log_state==LOG_STOPPED);
+    text=read_log("LOG0001.TXT",2);
+    expect_navigation(text,1,"-90.0000000;-180.0000000;0.000\r\n");
+    expect_navigation(text,2,";;\r\n"); free(text);
 }
 int main(void)
 {
@@ -283,7 +344,7 @@ int main(void)
     SDLogger_Start(); assert(sd_log_state==LOG_RECORDING && !strcmp(sd_log_filename,"LOG0002.TXT"));
     LSM6DS3_Sample s={0.000488f,-1,16,0.07f,-70,2000};
     LogTime t={.year=2026,.month=10,.day=26,.hour=12,.minute=34,.second=56,.millisecond=123,.valid=1};
-    for (unsigned n=0;n<100;++n) SDLogger_Append(&s,t);
+    for (unsigned n=0;n<100;++n) SDLogger_Append(&s,t,NULL);
     inject=1;
     for (unsigned n=0;n<100 && sd_log_written<101;++n) SDLogger_Process(tick+=20);
     assert(sd_log_written==101 && sd_log_state==LOG_RECORDING);
@@ -292,22 +353,23 @@ int main(void)
     assert(f_open(&f,"LOG0002.TXT",FA_READ)==FR_OK);
     char *text=calloc(20000,1); assert(text);
     assert(f_read(&f,text,19999,&done)==FR_OK && done>8000); assert(f_close(&f)==FR_OK);
-    assert(!strncmp(text,"NR;DATA;CZAS;ACC_X;ACC_Y;ACC_Z;GYRO_X;GYRO_Y;GYRO_Z\r\n",49));
-    assert(strstr(text,"1;2026-10-26;12:34:56.123;0.000488;-1.000000;16.000000;0.070;-70.000;2000.000\r\n"));
-    assert(strstr(text,"101;;;1.000000;2.000000;3.000000;4.000;5.000;6.000\r\n"));
+    static const char header[]="NR;DATA;CZAS;ACC_X;ACC_Y;ACC_Z;GYRO_X;GYRO_Y;GYRO_Z;GPS_LAT;GPS_LON;GPS_SPEED_KMH\r\n";
+    assert(!strncmp(text,header,sizeof(header)-1U));
+    assert(strstr(text,"1;2026-10-26;12:34:56.123;0.000488;-1.000000;16.000000;0.070;-70.000;2000.000;;;\r\n"));
+    assert(strstr(text,"101;;;1.000000;2.000000;3.000000;4.000;5.000;6.000;;;\r\n"));
     unsigned lines=0;
     for (char *p=text;*p;) {
         char *end=strstr(p,"\r\n"); assert(end); unsigned columns=0;
         for (char *q=p;q<end;++q) if (*q==';') ++columns;
-        assert(columns==8); ++lines; p=end+2;
+        assert(columns==11); ++lines; p=end+2;
     }
     assert(lines==102);
     assert(f_open(&f,"LOG0001.TXT",FA_READ)==FR_OK); char old[9]={0};
     assert(f_read(&f,old,8,&done)==FR_OK && !strcmp(old,"preserve")); assert(f_close(&f)==FR_OK);
     SDLogger_Start(); assert(!strcmp(sd_log_filename,"LOG0003.TXT"));
-    for (unsigned n=0;n<129;++n) SDLogger_Append(&s,t);
+    for (unsigned n=0;n<129;++n) SDLogger_Append(&s,t,NULL);
     assert(sd_log_state==LOG_DATA_LOSS && sd_log_dropped); SDLogger_Process(tick);
-    SDLogger_Start(); SDLogger_Append(&s,t); write_error=1;
+    SDLogger_Start(); SDLogger_Append(&s,t,NULL); write_error=1;
     SDLogger_Process(tick); SDLogger_RequestStop(); SDLogger_Process(tick);
     assert(sd_log_state==LOG_CARD_ERROR);
     assert(sd_log_error==FR_DISK_ERR); /* Preserve the first failure through f_close. */
@@ -326,6 +388,7 @@ int main(void)
     free(text);
     test_automatic_rotation(); test_stop_and_tick_wrap(); test_rotation_error(); test_sync_and_restart(); test_error_messages();
     test_auto_retry_and_reinsert(); test_retry_different_card(); test_button_pause_resume(); test_retry_wrap_and_acquisition_fault();
+    test_navigation_log();
     free(image);
-    puts("PASS SD logger/FatFs: FAT/UTC, rotation, 2s retries, absent/reinserted/different card, gaps, B1 pause/resume/debounce, full card, fault recovery and wrap");
+    puts("PASS SD logger/FatFs: 12 columns, queued GPS/speed snapshots, no fix/stale/zero/wrap, rotation, retries, card replacement, B1 and faults");
 }

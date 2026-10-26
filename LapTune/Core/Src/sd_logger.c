@@ -5,7 +5,14 @@
 #include <string.h>
 
 #define CAPACITY 128U
-static struct Record { LSM6DS3_Sample sample; LogTime time; uint32_t number; } queue[CAPACITY];
+struct Navigation {
+    int32_t latitude_e7,longitude_e7;
+    uint32_t speed_millikmh;
+    uint8_t position_valid,speed_valid;
+};
+static struct Record {
+    LSM6DS3_Sample sample; LogTime time; uint32_t number; struct Navigation gps;
+} queue[CAPACITY];
 static unsigned head,tail,count;
 static uint32_t sequence,last_sync,file_started,last_attempt,last_button;
 static unsigned file_number,rotation_records;
@@ -84,7 +91,7 @@ static void open_next_file(void)
     if (r!=FR_OK) { fail(r,r==FR_EXIST || r==FR_DENIED ? LOG_FULL : LOG_CARD_ERROR); return; }
     opened=1;
     (void)strcpy(sd_log_filename,name);
-    static const char header[]="NR;DATA;CZAS;ACC_X;ACC_Y;ACC_Z;GYRO_X;GYRO_Y;GYRO_Z\r\n";
+    static const char header[]="NR;DATA;CZAS;ACC_X;ACC_Y;ACC_Z;GYRO_X;GYRO_Y;GYRO_Z;GPS_LAT;GPS_LON;GPS_SPEED_KMH\r\n";
     UINT wrote=0;
     r=f_write(&file,header,sizeof(header)-1,&wrote);
     if (r==FR_OK && wrote!=sizeof(header)-1) r=FR_DENIED;
@@ -142,12 +149,24 @@ void SDLogger_DataLoss(void)
     acquisition_fault=1;
     if (sd_log_state==LOG_RECORDING) { ++sd_log_dropped; fail(FR_INT_ERR,LOG_DATA_LOSS); }
 }
-void SDLogger_Append(const LSM6DS3_Sample *sample,LogTime time)
+void SDLogger_Append(const LSM6DS3_Sample *sample,LogTime time,const GPS_Data *gps)
 {
     ++sequence; acquisition_fault=0;
     if (sd_log_state!=LOG_RECORDING || stop_requested || !automatic_enabled) { ++sd_log_dropped; return; }
     if (count==CAPACITY) { ++sd_log_dropped; fail(FR_INT_ERR,LOG_DATA_LOSS); return; }
     queue[head].sample=*sample; queue[head].time=time; queue[head].number=sequence;
+    struct Navigation nav={0};
+    uint32_t now=HAL_GetTick();
+    if (gps && gps->connected) {
+        if (gps->position_valid && (uint32_t)(now-gps->position_ms)<GPS_FRESH_MS) {
+            nav.latitude_e7=gps->latitude_e7; nav.longitude_e7=gps->longitude_e7;
+            nav.position_valid=1;
+        }
+        if (gps->speed_valid && (uint32_t)(now-gps->speed_ms)<GPS_FRESH_MS) {
+            nav.speed_millikmh=gps->speed_millikmh; nav.speed_valid=1;
+        }
+    }
+    queue[head].gps=nav;
     head=(head+1U)%CAPACITY; ++count;
 }
 static void fixed(char out[20],float value,unsigned factor,unsigned digits)
@@ -159,7 +178,7 @@ static void fixed(char out[20],float value,unsigned factor,unsigned digits)
 }
 static unsigned format(char out[192],const struct Record *r)
 {
-    char date[16]="",time[24]="",value[6][20];
+    char date[16]="",time[24]="",value[6][20],navigation[3][20]={{0}};
     if (r->time.valid) {
         (void)snprintf(date,sizeof(date),"%04u-%02u-%02u",r->time.year,r->time.month,r->time.day);
         (void)snprintf(time,sizeof(time),"%02u:%02u:%02u.%03u",r->time.hour,r->time.minute,r->time.second,r->time.millisecond);
@@ -167,8 +186,20 @@ static unsigned format(char out[192],const struct Record *r)
     fixed(value[0],r->sample.ax,1000000,6); fixed(value[1],r->sample.ay,1000000,6);
     fixed(value[2],r->sample.az,1000000,6); fixed(value[3],r->sample.gx,1000,3);
     fixed(value[4],r->sample.gy,1000,3); fixed(value[5],r->sample.gz,1000,3);
-    return (unsigned)snprintf(out,192,"%lu;%s;%s;%s;%s;%s;%s;%s;%s\r\n",
-        (unsigned long)r->number,date,time,value[0],value[1],value[2],value[3],value[4],value[5]);
+    if (r->gps.position_valid) {
+        const int32_t coordinates[]={r->gps.latitude_e7,r->gps.longitude_e7};
+        for (unsigned i=0;i<2;++i) {
+            uint32_t magnitude=coordinates[i]<0 ? 0U-(uint32_t)coordinates[i] : (uint32_t)coordinates[i];
+            (void)snprintf(navigation[i],20,"%s%lu.%07lu",coordinates[i]<0 ? "-" : "",
+                           (unsigned long)(magnitude/10000000U),(unsigned long)(magnitude%10000000U));
+        }
+    }
+    if (r->gps.speed_valid)
+        (void)snprintf(navigation[2],20,"%lu.%03lu",(unsigned long)(r->gps.speed_millikmh/1000U),
+                       (unsigned long)(r->gps.speed_millikmh%1000U));
+    return (unsigned)snprintf(out,192,"%lu;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s\r\n",
+        (unsigned long)r->number,date,time,value[0],value[1],value[2],value[3],value[4],value[5],
+        navigation[0],navigation[1],navigation[2]);
 }
 void SDLogger_Process(uint32_t now)
 {

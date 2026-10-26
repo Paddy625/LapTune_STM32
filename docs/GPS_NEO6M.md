@@ -65,6 +65,25 @@ DATE 2026-10-20
 - Nieprawidłowe albo przeterminowane pola mają kreski. Data i czas są
   uznawane za ważne dopiero po poprawnym RMC ze statusem A.
 
+## Prędkość i zapis na SD
+
+NEO-6M podaje **prędkość poziomą względem ziemi** (speed over ground, SOG)
+w komunikacie RMC, w polu po długości geograficznej i E/W. Nie trzeba liczyć
+jej z różnic położenia: jest wyznaczana przez odbiornik GPS. W NMEA jednostką
+są węzły, a kod przelicza je według **1 kn = 1,852 km/h**. Przykład:
+`22.4` kn daje `41.485` km/h po zaokrągleniu do 3 miejsc.
+
+`GPS_Data.speed_millikmh` przechowuje tysięczne km/h jako liczbę całkowitą,
+np. `41485`; `speed_valid` i `speed_ms` określają ważność i czas odebrania.
+Puste pole prędkości oznacza brak wartości. RMC ze statusem V, GGA bez fixa
+oraz 3 s bez świeżej prędkości unieważniają ją; ważne zero pozostaje zerem.
+
+Logger SD dopisuje `GPS_LAT`, `GPS_LON` i `GPS_SPEED_KMH` do każdego wiersza
+IMU, z migawką nawigacji przy odczycie z FIFO. Przy domyślnej aktualizacji
+GPS 1 Hz wartości będą powtarzane w wielu wierszach IMU 104 Hz. Puste pola
+oznaczają brak ważnych, świeżych danych. Szczegóły: [format pliku SD](SD_LOGGING.md).
+Prędkość trafia do pliku i struktury danych; układ ekranu GPS pozostaje taki jak wyżej.
+
 ## Jak działa kod
 
 - `gps.c`: odbiór jednego bajtu przez `HAL_UART_Receive_IT`, kolejka 512 B.
@@ -75,9 +94,10 @@ DATE 2026-10-20
 - `gps_nmea.c`: kontrola XOR `*HH`, rozpoznawanie GP/GN RMC oraz GGA,
   walidacja współrzędnych, jednostek i daty. Nie używa `sscanf` z floatami,
   pamięci dynamicznej ani funkcji blokujących odbiór.
-- `GPS_Data`: współrzędne jako stopnie × 10⁷, wysokość w mm oraz pola
+- `GPS_Data`: współrzędne jako stopnie × 10⁷, wysokość w mm, prędkość
+  jako km/h × 1000 oraz pola
   kalendarza. Struktura jest dostępna przez `GPS_GetData()` po `GPS_Process()`.
-- RMC dostarcza datę/czas i pozycję; GGA dostarcza pozycję, wysokość MSL,
+- RMC dostarcza datę/czas, pozycję i prędkość; GGA dostarcza pozycję, wysokość MSL,
   jakość fixa i liczbę satelitów. Pola mają osobne znaczniki świeżości.
   Po **3 s** bez nowej wartości odpowiednia flaga ważności jest zerowana.
   RMC ze statusem V i GGA z jakością 0 unieważniają odpowiednie pomiary.
@@ -103,6 +123,7 @@ python3 /workspace/.laptune-setup/build.py Release
 
 Testy GPS obejmują przykładowe pakiety NMEA, błędne sumy, puste pola,
 brak fixa, S/W, ujemną wysokość, poprawność dat, zerowe współrzędne,
+prędkość RMC i konwersję na km/h, brak/zero/błędne pole prędkości,
 przepełnienie licznika czasu, ramki dzielone między odczytami, przepełnienie
 kolejki, błędy UART i układ ekranu. To testy programowe z atrapą HAL;
 nie potwierdzają odbioru satelitów, zasilania, anteny ani dokładności pomiaru.

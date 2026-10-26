@@ -12,6 +12,8 @@ Automatycznie zamyka plik co 3 minuty i rozpoczyna kolejny; synchronizuje dane
 co około sekundę. Po błędzie ponawia montowanie co 2 sekundy i wznawia zapis
 w nowym pliku. B1 zatrzymuje zapis przed wyjęciem karty; kolejne naciśnięcie
 wznawia go bez resetowania płytki.
+Log zawiera także pozycję GPS (szerokość/długość) i prędkość względem ziemi
+z RMC w km/h; bez ważnego fixa odpowiednie pola pozostają puste.
 
 IMU parameters:
 	- Maximum acceleration +/- 16g
