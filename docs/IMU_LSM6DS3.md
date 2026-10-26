@@ -1,8 +1,9 @@
 # KAmodLSM6DS3 — akcelerometr i żyroskop
 
 LSM6DS3 zastępuje wcześniejszy LIS3DH. Pozostaje **SPI2, tryb 3, 8 MHz**,
-z programowym CS na PB12. TFT i GPS oraz ich wyświetlane pola są zachowane.
-Odczyt żyroskopu nie dodaje nowych wartości na ekranie.
+z programowym CS na PB12. Na TFT są trzy pary wierszy: AX/GX, AY/GY i AZ/GZ.
+W każdej parze akcelerometr jest nad żyroskopem, a wartości są w kolejności
+**minimum, chwilowa, maksimum**. Widok GPS pozostaje bez zmian.
 
 ## Połączenia według nazw sygnałów
 
@@ -73,10 +74,33 @@ Rejestry i czułości zweryfikowano w
 [oficjalnym sterowniku ST](https://github.com/STMicroelectronics/lsm6ds3-pid/tree/1b0caf4bf522c7ae33b7f00b23fad531e58d5e90).
 Sterownik ST był źródłem odniesienia; projekt nie wymaga jego pobierania.
 
+## Wyświetlanie
+
+Dla każdej osi są dwa wiersze: A — przyspieszenie w g, G — prędkość kątowa
+w °/s. Każda kolumna ma siedem znaków; przyspieszenie ma trzy miejsca po
+przecinku, a żyroskop jedno. Przykład jednej pary (MIN, chwilowa, MAX):
+
+```text
+AX-16.000 +00.123 +16.000
+GX-2000.0 -0070.1 +2000.0
+```
+
+Wiersze AX/GX, AY/GY, AZ/GZ zaczynają się odpowiednio na y=18/26, 36/44,
+54/62, czcionka 5×7 ze skalą 1. Każdy zajmuje 8 pikseli wysokości.
+GPS nadal zajmuje y=72..119; jego kod, kolory, teksty i odświeżanie nie
+zostały zmienione. Nagłówek i stopka są zachowane.
+
+Minima i maksima obu czujników są inicjalizowane pierwszą poprawną próbką
+oraz aktualizowane po każdym udanym odczycie. Zmienne żyroskopu to
+`gx/gy/gz`, `min_gx/min_gy/min_gz`, `max_gx/max_gy/max_gz`. Cała ramka IMU
+korzysta ze wspólnej migawki danych co 100 ms, a jedno wywołanie rysuje jeden
+wiersz. Przy błędzie wszystkie trzy pola danego wiersza są zastępowane
+kreskami. Stała szerokość tekstu usuwa poprzednie cyfry.
+
 ## Sprawdzenie
 
-Po wgraniu i poprawnym podłączeniu na TFT powinny nadal pojawiać się X/Y/Z,
-ich min/max oraz GPS. Na nieruchomej płytce moduł wektora przyspieszenia
+Po wgraniu i poprawnym podłączeniu na TFT powinny pojawiać się pary AX/GX,
+AY/GY, AZ/GZ z min/max obu czujników oraz dotychczasowy GPS. Na nieruchomej płytce moduł wektora przyspieszenia
 `sqrt(ax*ax + ay*ay + az*az)` powinien wynosić około 1 g, a prędkości kątowe
 być bliskie 0°/s, z możliwym
 biasem. `gx`, `gy`, `gz` można obserwować w debuggerze STM32CubeIDE.

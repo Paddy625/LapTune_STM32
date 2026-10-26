@@ -54,7 +54,7 @@ UART_HandleTypeDef huart3;
 /* USER CODE BEGIN PV */
 
 float ax, max_x=0, min_x=0, ay, max_y=0, min_y=0, az, max_z=0, min_z=0;
-float gx, gy, gz; /* LSM6DS3 angular velocity in degrees/s; not drawn on TFT. */
+float gx, min_gx=0, max_gx=0, gy, min_gy=0, max_gy=0, gz, min_gz=0, max_gz=0;
 static uint8_t sensor_ok, have_sample;
 static uint32_t last_sample, last_sensor_retry;
 
@@ -144,6 +144,7 @@ int main(void)
         gx = sample.gx; gy = sample.gy; gz = sample.gz;
         if (!have_sample) {
           min_x = max_x = ax; min_y = max_y = ay; min_z = max_z = az;
+          min_gx = max_gx = gx; min_gy = max_gy = gy; min_gz = max_gz = gz;
           have_sample = 1U;
         }
         if (ax > max_x) max_x = ax;
@@ -152,12 +153,23 @@ int main(void)
         if (ay < min_y) min_y = ay;
         if (az > max_z) max_z = az;
         if (az < min_z) min_z = az;
+        if (gx > max_gx) max_gx = gx;
+        if (gx < min_gx) min_gx = gx;
+        if (gy > max_gy) max_gy = gy;
+        if (gy < min_gy) min_gy = gy;
+        if (gz > max_gz) max_gz = gz;
+        if (gz < min_gz) min_gz = gz;
       }
     }
-    const float current[3] = {ax, ay, az};
-    const float minimum[3] = {min_x, min_y, min_z};
-    const float maximum[3] = {max_x, max_y, max_z};
-    if (AccDisplay_Update(HAL_GetTick(), current, minimum, maximum,
+    const IMU_DisplayData readings = {
+      .accel = {ax, ay, az},
+      .accel_min = {min_x, min_y, min_z},
+      .accel_max = {max_x, max_y, max_z},
+      .gyro = {gx, gy, gz},
+      .gyro_min = {min_gx, min_gy, min_gz},
+      .gyro_max = {max_gx, max_gy, max_gz}
+    };
+    if (AccDisplay_Update(HAL_GetTick(), &readings,
                           sensor_ok && have_sample) != HAL_OK) {
       Error_Handler();
     }

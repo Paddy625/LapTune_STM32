@@ -66,14 +66,14 @@ sprawdź ich wyprowadzenia na nowej płytce KAmod.
 
 - `tft.c` / `tft.h`: inicjalizacja ST7735S, RGB565, prostokąty i tekst 5×7.
   Bufor jednej linii ma 320 bajtów; pełny framebuffer nie jest potrzebny.
-- `acc_display.c`: X/Y/Z w g (1 g ≈ 9,80665 m/s²), minima i maksima od startu.
-  Litera osi bezpośrednio poprzedza bieżącą wartość. Po prawej, mniejszą
-  czcionką, wyświetlane są maksimum u góry i minimum na dole, bez podpisów.
-  Min/max inicjalizowane są pierwszym poprawnym pomiarem, a nie zerem.
+- `acc_display.c`: sześć wierszy AX/GX, AY/GY, AZ/GZ. Dla każdej osi
+  przyspieszenie w g (1 g ≈ 9,80665 m/s²) jest nad żyroskopem w °/s.
+  W każdym wierszu wartości są w kolejności MIN, chwilowa, MAX; czcionka
+  ma skalę 1. Min/max obu czujników startują od pierwszego pomiaru, nie zera.
   LSM6DS3 ma ODR 104 Hz, zakres ±16 g i BDU; przelicznik 0,488 mg/LSB.
-  Żyroskop ±2000°/s jest odczytywany do gx/gy/gz, bez nowych pól na TFT.
+  Żyroskop ±2000°/s jest odczytywany do gx/gy/gz i ma własne min/max na TFT.
 - `main.c`: odczyt planowany co 10 ms, odświeżanie ekranu co 100 ms.
-  Wysyłane jest jedno pole tekstowe na obieg pętli; nie czyścimy całego ekranu
+  Wysyłany jest jeden wiersz IMU na obieg pętli; nie czyścimy całego ekranu
   przy każdym pomiarze. Transmisje HAL są blokujące, więc okres odczytu ma jitter
   i nie stanowi gwarancji pobrania każdej próbki 100 Hz. Do ścisłego próbkowania
   potrzebny byłby osobny mechanizm DRDY/timer/FIFO/DMA.
@@ -88,7 +88,8 @@ sprawdź ich wyprowadzenia na nowej płytce KAmod.
 1. Podłącz układ przy wyłączonym zasilaniu według tabeli.
 2. Otwórz `LapTune/.project` w STM32CubeIDE, zbuduj Debug lub Release i wgraj
    przez ST-Link. Pliki w `Core/Src` są objęte ścieżką źródeł projektu.
-3. Powinien pojawić się nagłówek LAPTUNE oraz trzy wiersze X/Y/Z z MIN/MAX.
+3. Powinien pojawić się nagłówek LAPTUNE, pary AX/GX, AY/GY, AZ/GZ
+   (w każdej MIN, chwilowa, MAX) oraz dotychczasowy widok GPS.
    Sprawdź na płasko około 1 g na osi pionowej i około 0 g na dwóch pozostałych;
    znak zależy od orientacji. Obrót płytki powinien zmieniać wartości i ekstrema.
 4. Kontroler ST7735S nie wyznacza jednoznacznie adresów widocznego obszaru.

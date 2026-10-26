@@ -12,4 +12,4 @@ IMU parameters:
 	- Accelerometer and gyroscope ODR 104Hz; main loop polls approximately 100Hz
 	- Acceleration sensitivity 0.488mg/LSB
 	- Angular velocity range +/- 2000 degrees/s, sensitivity 0.070 degrees/s/LSB
-	- Six axes read; TFT continues to show acceleration and GPS
+	- TFT shows AX/GX, AY/GY, AZ/GZ with MIN/NOW/MAX; GPS view unchanged
