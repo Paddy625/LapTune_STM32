@@ -126,25 +126,12 @@ void SD_SPI_Service(void) { ServiceAcquisition(); }
 
 static HAL_StatusTypeDef ShowLogState(void)
 {
-  static int previous=-1;
-  static char previous_filename[sizeof(sd_log_filename)];
-  if ((int)sd_log_state==previous && !strcmp(previous_filename,sd_log_filename)) return HAL_OK;
-  char text[32];
-  const char *label="SD OFF";
-  switch (sd_log_state) {
-  case LOG_RECORDING: label="SD REC"; break;
-  case LOG_STOPPED: label="SD SAVED"; break;
-  case LOG_CARD_ERROR: label="SD ERROR"; break;
-  case LOG_FULL: label="SD FULL"; break;
-  case LOG_DATA_LOSS: label="SD DATA LOSS"; break;
-  default: break;
-  }
-  (void)snprintf(text,sizeof(text),"%-12s%-12s",label,sd_log_filename);
+  static char previous[26];
+  char text[26];
+  SDLogger_StatusText(text);
+  if (!strcmp(previous,text)) return HAL_OK;
   HAL_StatusTypeDef result=TFT_Text(4,120,text,1,sd_log_state==LOG_RECORDING || sd_log_state==LOG_STOPPED ? TFT_WHITE : TFT_RED,TFT_BLACK);
-  if (result==HAL_OK) {
-    previous=(int)sd_log_state;
-    (void)strcpy(previous_filename,sd_log_filename);
-  }
+  if (result==HAL_OK) (void)strcpy(previous,text);
   return result;
 }
 

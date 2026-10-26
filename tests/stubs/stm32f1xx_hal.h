@@ -9,6 +9,7 @@ extern GPIO_TypeDef gpio_a, gpio_b;
 #define GPIOB (&gpio_b)
 #define GPIO_PIN_0 (1U << 0)
 #define SPI_BAUDRATEPRESCALER_8 16U
+#define SPI_BAUDRATEPRESCALER_32 32U
 #define SPI_BAUDRATEPRESCALER_256 56U
 #define GPIO_PIN_6 (1U << 6)
 #define GPIO_PIN_8 (1U << 8)

@@ -1,4 +1,5 @@
 #include "sd_logger.h"
+#include "sd_spi.h"
 #include "ff.h"
 #include "diskio.h"
 #include <assert.h>
@@ -11,6 +12,9 @@ static uint32_t tick;
 static int no_card,write_error,inject;
 static unsigned sync_calls;
 static void (*on_sync)(void);
+volatile SD_SPI_Diagnostics sd_spi_diag;
+/* The footer test injects a CMD0 failure; card protocol is tested separately. */
+const char *SD_SPI_ErrorName(void) { assert(sd_spi_diag.error==SD_SPI_CMD0); return "CMD0"; }
 uint32_t HAL_GetTick(void) { return tick; }
 DSTATUS disk_initialize(BYTE p) { return p || no_card ? STA_NOINIT : 0; }
 DSTATUS disk_status(BYTE p) { return disk_initialize(p); }
@@ -45,6 +49,7 @@ DRESULT disk_ioctl(BYTE p,BYTE cmd,void *out)
 static void fresh_card(uint32_t start)
 {
     no_card=write_error=inject=0; sync_calls=0; on_sync=NULL; tick=start;
+    sd_spi_diag=(SD_SPI_Diagnostics){0};
     assert(f_mount(NULL,"",0)==FR_OK);
     memset(image,0,SECTORS*512U);
     MKFS_PARM options={.fmt=FM_FAT|FM_SFD,.n_fat=1,.align=1,.n_root=512,.au_size=512};
@@ -148,6 +153,21 @@ static void test_sync_and_restart(void)
     assert(strstr(text,"1;;;") && !strstr(text,"2;;;")); free(text);
     SDLogger_RequestStop(); SDLogger_Process(tick); assert(sd_log_state==LOG_STOPPED);
 }
+static void test_error_messages(void)
+{
+    fresh_card(0); SDLogger_Start(); char text[26]; SDLogger_StatusText(text);
+    assert(strlen(text)==25 && strstr(text,"SD REC") && strstr(text,"LOG0001.TXT"));
+    SDLogger_RequestStop(); SDLogger_Process(tick); SDLogger_StatusText(text);
+    assert(strlen(text)==25 && strstr(text,"SD SAVED"));
+    no_card=1; SDLogger_Start(); SDLogger_StatusText(text);
+    assert(strstr(text,"SD E03 NOT READY"));
+    sd_spi_diag=(SD_SPI_Diagnostics){.error=SD_SPI_CMD0,.command=0,.response=0xFF};
+    SDLogger_StatusText(text); assert(strlen(text)==25 && strstr(text,"SD E03 CMD0 00:FF"));
+    sd_spi_diag=(SD_SPI_Diagnostics){0}; no_card=0;
+    assert(f_mount(NULL,"",0)==FR_OK); memset(image,0,SECTORS*512U);
+    SDLogger_Start(); assert(sd_log_error==FR_NO_FILESYSTEM); SDLogger_StatusText(text);
+    assert(strlen(text)==25 && strstr(text,"SD E13 FAT16/32"));
+}
 int main(void)
 {
     image=calloc(SECTORS,512); assert(image);
@@ -187,6 +207,7 @@ int main(void)
     SDLogger_Start(); SDLogger_Append(&s,t); write_error=1;
     SDLogger_Process(tick); SDLogger_RequestStop(); SDLogger_Process(tick);
     assert(sd_log_state==LOG_CARD_ERROR);
+    assert(sd_log_error==FR_DISK_ERR); /* Preserve the first failure through f_close. */
     write_error=0; no_card=1; SDLogger_Start(); assert(sd_log_state==LOG_CARD_ERROR);
     no_card=0; assert(f_mount(&fs,"",1)==FR_OK);
     DWORD free_clusters; FATFS *volume;
@@ -196,7 +217,7 @@ int main(void)
     assert(f_close(&f)==FR_OK);
     SDLogger_Start(); assert(sd_log_state==LOG_FULL); SDLogger_Process(tick);
     free(text);
-    test_automatic_rotation(); test_stop_and_tick_wrap(); test_rotation_error(); test_sync_and_restart();
+    test_automatic_rotation(); test_stop_and_tick_wrap(); test_rotation_error(); test_sync_and_restart(); test_error_messages();
     free(image);
     puts("PASS SD logger/FatFs: FAT files, UTC/units, 3-minute rotation, continuous numbering, concurrent enqueue/stop, tick wrap, sync/restart, full card and I/O errors");
 }

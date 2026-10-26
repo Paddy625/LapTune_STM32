@@ -15,4 +15,6 @@ void SDLogger_Append(const LSM6DS3_Sample *sample,LogTime time);
 void SDLogger_Process(uint32_t now);
 void SDLogger_RequestStop(void);
 void SDLogger_DataLoss(void);
+/* 25 printable ASCII characters plus NUL, for the existing TFT footer. */
+void SDLogger_StatusText(char text[26]);
 #endif

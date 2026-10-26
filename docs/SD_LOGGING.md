@@ -18,8 +18,11 @@ Czytnik ze zdjęcia ma piny **3V3, CS, MOSI, CLK, MISO, GND** i pracuje przy
 
 CS wyświetlacza pozostaje na PB6 / D10. TFT nie wymaga MISO; GT_SO pozostaje
 niepodłączone. Kod nigdy nie wybiera obu urządzeń jednocześnie. SPI1 pracuje
-w trybie 0, 8 MHz; tylko inicjalizacja karty odbywa się przy 250 kHz, po czym
-wraca częstotliwość TFT. Nie zmienia się żadne połączenie GPS ani IMU.
+w trybie 0. TFT nadal pracuje przy 8 MHz, a **SD przy 2 MHz**; inicjalizacja
+karty odbywa się przy 250 kHz. Zmiana prędkości odbywa się przy nieaktywnych
+CS, a po operacji SD przywracana jest prędkość TFT. Sterownik zwalnia CS SD
+i wysyła dodatkowe takty również między poleceniami inicjalizacji.
+Nie zmienia się żadne połączenie GPS ani IMU.
 
 Ten czytnik zasilaj **3,3 V**, nie 5 V. Przewody SPI powinny być krótkie.
 Przy niestabilnym zasilaniu sprawdź je podczas zapisu; karta może pobierać
@@ -30,6 +33,15 @@ większy prąd chwilowy niż wartość średnia z opisu modułu.
 Karta musi mieć już system plików **FAT16 lub FAT32**, sektor 512 B. Zalecana
 karta microSDHC do 32 GB. Karty SDXC są możliwe po przygotowaniu FAT32;
 fabryczny exFAT nie jest obsługiwany. Firmware **nie formatuje karty**.
+Starsze karty SDSC, w tym **256 MB z FAT16** (w Windows często oznaczone
+po prostu jako „FAT”), również są obsługiwane, z adresowaniem bajtowym.
+
+Reset CMD0 jest ponawiany przez maksymalnie około sekundę. Dla starszych kart
+odrzucenie CMD59 jako nieobsługiwanego polecenia nie przerywa inicjalizacji.
+Sterownik nadal sprawdza CRC16 odczytanych danych i wysyła poprawne CRC przy
+zapisie; jeśli karta odrzuci CMD59, sprawdzanie CRC zapisu po stronie karty
+pozostaje wyłączone. Potwierdzenie zapisu może być poprzedzone bajtami `0xFF`;
+sterownik oczekuje na właściwy token w ograniczonej liczbie taktów.
 
 Zapis rozpoczyna się automatycznie po uruchomieniu. Co **3 minuty** logger
 dopisuje bufor do bieżącego pliku, zamyka go i automatycznie otwiera kolejny.
@@ -112,7 +124,7 @@ ostatni wiersz pliku może być niepełny.
    Wyjmuj kartę po pojawieniu się **`SD SAVED`**. Pomiary i ekran nadal działają.
 5. Po zatrzymaniu przez B1 nową sesję rozpocznij przez reset Nucleo z włożoną kartą.
 
-`SD ERROR` oznacza m.in. brak karty, zły system plików lub błąd komunikacji.
+Zamiast ogólnego `SD ERROR` stopka pokazuje teraz **`SD E…` z przyczyną**.
 `SD FULL` oznacza brak miejsca. `SD DATA LOSS` oznacza problem z ciągłością
 danych. Te statusy nie oznaczają bezpiecznie zamkniętej, kompletnej sesji.
 Bez karty IMU/GPS i wyświetlacz nadal pracują, lecz nie ma automatycznego
@@ -130,8 +142,34 @@ plików i wcześniejsze dane. Podział na pliki i synchronizacja ograniczają to
 ryzyko, lecz pełna ochrona wymaga podtrzymania zasilania wystarczającego do
 zakończenia zapisu. B1 pozostaje opcją bezpiecznego wyjęcia karty podczas pracy.
 
+## Diagnostyka błędów
+
+Przykład `SD E03 CMD0 00:FF` zawiera kod FatFs (`03`), etap/błąd sterownika
+(`CMD0`), numer ostatniego polecenia w zapisie dziesiętnym (`00`) i odpowiedź
+R1 w zapisie szesnastkowym (`FF`). `FF` oznacza brak poprawnej odpowiedzi R1.
+Nie identyfikuje sam w sobie konkretnego uszkodzonego przewodu ani przyczyny
+elektrycznej. Gdy komunikacja działa, lecz FatFs nie rozpoznaje woluminu,
+pokazywane jest np. `SD E13 FAT16/32`, bez dodatkowych pól SPI.
+
+| Przykład / oznaczenie | Znaczenie |
+| --- | --- |
+| `SD E03 CMD0 00:FF` | Karta nie odpowiedziała poprawnie na reset / wejście w tryb SPI |
+| `SD E03 ACMD41 41:01` | Karta pozostała w stanie inicjalizacji do upływu limitu czasu |
+| `SD E13 FAT16/32` | SPI zainicjalizowane, ale brak rozpoznanego woluminu FAT16/FAT32; możliwy inny format lub uszkodzone struktury |
+| `SD E01 CRC 17:00` | Polecenie odczytu przyjęte, lecz suma CRC danych się nie zgadza |
+| `SD E01 TOKEN 17:00` | Brak poprawnego tokenu danych po przyjęciu polecenia odczytu |
+| `REJECT`, `BUSY`, `STATUS` | Odrzucenie danych, przekroczony czas gotowości lub zgłoszony błąd karty |
+| `HAL`, `CLOCK` | Błąd transmisji HAL SPI lub zmiany częstotliwości magistrali |
+
+Po błędzie najlepiej zanotować **całą treść stopki**. Po zaktualizowaniu
+firmware uruchom płytkę z kartą włożoną przed resetem. Sam napis „FAT” przy
+karcie 256 MB nie jest powodem do ponownego formatowania.
+
 W debuggerze: `sd_log_state`, `sd_log_filename`, `sd_log_written`,
-`sd_log_error` (FRESULT) i `sd_log_dropped`. Written liczy wiersze przyjęte
+`sd_log_error` (FRESULT), `sd_log_dropped` oraz `sd_spi_diag` (przyczyna,
+polecenie, odpowiedź R1, token danych/statusu, status HAL i aktywacja CRC karty).
+Zachowywany jest pierwszy błąd — późniejszy nieudany `f_close()` go nie zastępuje.
+Written liczy wiersze przyjęte
 przez `f_write`, nie potwierdzenie trwałości pamięci flash. Dropped sygnalizuje
 odrzucenie rekordu lub zdarzenie utraty ciągłości; nie jest dokładnym licznikiem
 próbek utraconych przy przepełnieniu sprzętowego FIFO.
@@ -156,4 +194,8 @@ automatyczny podział co 3 minuty, ciągłość numeracji i kolejki przy zmianie
 pliku, B1 podczas przejścia, przepełnienie zegara STM32 i ponowne montowanie
 po utracie niesynchronizowanego bufora. Obejmują też protokół SDHC/SDSC,
 CRC, osobne CS i timeouty.
+Model karty obejmuje również starszą kartę SDSC 256 MB, odrzucenie CMD59,
+kilka nieudanych resetów przed poprawną odpowiedzią, oczekiwanie na ACMD41,
+opóźniony token potwierdzenia zapisu, CS między poleceniami, prędkości obu
+urządzeń i nowe komunikaty diagnostyczne (w tym nierozpoznany wolumin FAT).
 Testy programowe nie potwierdzają elektryki modułu ani działania fizycznej karty.

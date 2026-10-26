@@ -1,4 +1,5 @@
 #include "sd_logger.h"
+#include "sd_spi.h"
 #include "../FatFs/ff.h"
 #include <stdio.h>
 #include <string.h>
@@ -27,7 +28,39 @@ DWORD get_fattime(void)
 }
 static void fail(FRESULT result,LogState state)
 {
-    sd_log_error=result; sd_log_state=state; stop_requested=1;
+    /* A failed best-effort close must not hide the original I/O/init failure. */
+    if (sd_log_state<LOG_CARD_ERROR) { sd_log_error=result; sd_log_state=state; }
+    stop_requested=1;
+}
+void SDLogger_StatusText(char text[26])
+{
+    const char *label="SD OFF";
+    switch (sd_log_state) {
+    case LOG_RECORDING: label="SD REC"; break;
+    case LOG_STOPPED: label="SD SAVED"; break;
+    case LOG_FULL: label="SD FULL"; break;
+    case LOG_DATA_LOSS: label="SD DATA LOSS"; break;
+    case LOG_CARD_ERROR: {
+        const char *reason="FILESYSTEM";
+        switch (sd_log_error) {
+        case FR_NO_FILESYSTEM: reason="FAT16/32"; break;
+        case FR_NOT_READY: reason="NOT READY"; break;
+        case FR_DISK_ERR: reason="I/O"; break;
+        case FR_WRITE_PROTECTED: reason="READ ONLY"; break;
+        case FR_INVALID_OBJECT: reason="FILE"; break;
+        case FR_INT_ERR: reason="INTERNAL"; break;
+        default: break;
+        }
+        if (sd_spi_diag.error!=SD_SPI_OK)
+            (void)snprintf(text,26,"SD E%02u %s %02u:%02X",sd_log_error,SD_SPI_ErrorName(),
+                           sd_spi_diag.command,sd_spi_diag.response);
+        else (void)snprintf(text,26,"SD E%02u %s",sd_log_error,reason);
+        size_t len=strlen(text); memset(text+len,' ',25U-len); text[25]='\0';
+        return;
+    }
+    default: break;
+    }
+    (void)snprintf(text,26,"%-12s%-12s ",label,sd_log_filename);
 }
 static void open_next_file(void)
 {
