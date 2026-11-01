@@ -12,6 +12,10 @@ for name in tft acc_display acc gps_nmea gps gps_display; do
     "$test_build/$name"
 done
 cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
+   -Itests/stubs -ILapTune/Core/Inc tests/test_gps_config.c LapTune/Core/Src/gps.c \
+   LapTune/Core/Src/gps_nmea.c -o "$test_build/gps_config"
+"$test_build/gps_config"
+cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
    -Itests/stubs -ILapTune/Core/Inc tests/test_log_clock.c LapTune/Core/Src/log_clock.c -o "$test_build/log_clock"
 "$test_build/log_clock"
 cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -DFF_USE_MKFS=1 \

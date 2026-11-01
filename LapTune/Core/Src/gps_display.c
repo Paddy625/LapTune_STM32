@@ -2,20 +2,29 @@
 #include <stdio.h>
 #include <string.h>
 
-HAL_StatusTypeDef GPSDisplay_Update(uint32_t now, const GPS_Data *data)
+HAL_StatusTypeDef GPSDisplay_Update(uint32_t now, const GPS_Data *data,const GPS_ConfigStatus *config)
 {
     static GPS_Data snapshot;
+    static GPS_ConfigStatus config_snapshot;
+    static uint8_t has_config;
     static uint32_t last_refresh;
     static uint8_t row, pending, started;
     char text[32], padded[26];
     uint8_t valid = 1;
     if (!pending) {
-        if (started && (uint32_t)(now-last_refresh) < 500U) return HAL_OK;
+        if (started && (uint32_t)(now-last_refresh) < GPS_MEASUREMENT_MS) return HAL_OK;
         snapshot = *data; last_refresh = now; row = 0; pending = started = 1;
+        has_config=config!=NULL; if (has_config) config_snapshot=*config;
     }
     switch (row) {
     case 0:
+        if (has_config && config_snapshot.state!=GPS_CONFIG_READY) {
+            (void)snprintf(text,sizeof(text),"GPS %s",config_snapshot.state==GPS_CONFIG_ERROR ? "CFG ERROR" : "SETUP");
+            valid=0; break;
+        }
         if (!snapshot.connected) (void)snprintf(text, sizeof(text), "GPS NO DATA");
+        else if (has_config) (void)snprintf(text,sizeof(text),"GPS %s 5HZ S:%02u",
+                                          snapshot.position_valid ? "FIX" : "NO FIX",snapshot.satellites);
         else (void)snprintf(text, sizeof(text), "GPS %s S:%02u",
                            snapshot.position_valid ? "FIX" : "NO FIX", snapshot.satellites);
         valid = snapshot.position_valid;

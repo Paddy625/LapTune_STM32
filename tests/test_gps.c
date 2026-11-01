@@ -8,6 +8,11 @@ static uint8_t *target;
 static unsigned aborts;
 static uint8_t fail_receive;
 static const char gga[] = "$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47\r\n";
+HAL_StatusTypeDef HAL_UART_Init(UART_HandleTypeDef *handle) { assert(handle==&uart); return HAL_OK; }
+HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *handle,const uint8_t *bytes,uint16_t len,uint32_t timeout)
+{
+    (void)timeout; assert(handle==&uart && len>=8 && bytes[0]==0xB5 && bytes[1]==0x62); return HAL_OK;
+}
 HAL_StatusTypeDef HAL_UART_Receive_IT(UART_HandleTypeDef *handle, uint8_t *ptr, uint16_t size)
 {
     assert(handle == &uart && size == 1);
@@ -27,6 +32,7 @@ int main(void)
 {
     GPS_Process(0); GPS_OnRxComplete(&other); GPS_OnError(&other);
     assert(GPS_Init(NULL) == HAL_ERROR);
+    uart.Init.BaudRate=GPS_BOOT_BAUD;
     assert(GPS_Init(&uart) == HAL_OK);
     feed("noise$garbage"); feed(gga);
     assert(!GPS_GetData()->connected); /* Parsing must happen in foreground. */

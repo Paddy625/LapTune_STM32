@@ -75,27 +75,28 @@ ale nie trafiają do pliku. Luki w NR pokazują więc przerwę w zapisie;
 pierwszy zapisany wiersz może mieć numer większy od 1. Każdy plik ma nagłówek:
 
 ```text
-NR;DATA;CZAS;ACC_X;ACC_Y;ACC_Z;GYRO_X;GYRO_Y;GYRO_Z;GPS_LAT;GPS_LON;GPS_SPEED_KMH
-1;2026-10-26;12:34:56.123;0.000488;-1.000000;16.000000;0.070;-70.000;2000.000;52.2297000;21.0122000;41.485
+NR;DATA;CZAS;ACC_X;ACC_Y;ACC_Z;GYRO_X;GYRO_Y;GYRO_Z;GPS_LAT;GPS_LON;GPS_SPEED_KMH;GPS_ALT_MSL_M
+1;2026-11-01;12:34:56.200;0.000488;-1.000000;16.000000;0.070;-70.000;2000.000;52.2297000;21.0122000;41.485;123.456
 ```
 
 Pola oddziela średnik, separator dziesiętny to kropka, końce wierszy to CRLF.
 ACC jest w g z 6 miejscami po przecinku; GYRO w °/s z 3 miejscami. Precyzja
 zapisu jest większa niż na ekranie i nie oznacza takiej dokładności czujnika.
-Nowe pliki mają **12 kolumn**. Trzy kolumny GPS są dopisane na końcu:
+Nowe pliki mają **13 kolumn**. Cztery kolumny GPS są dopisane na końcu:
 
 | Kolumna | Jednostka i znaczenie |
 | --- | --- |
 | `GPS_LAT` | Szerokość w stopniach dziesiętnych, 7 miejsc; N dodatnie, S ujemne |
 | `GPS_LON` | Długość w stopniach dziesiętnych, 7 miejsc; E dodatnie, W ujemne |
 | `GPS_SPEED_KMH` | Prędkość pozioma względem ziemi z RMC, w km/h z 3 miejscami |
+| `GPS_ALT_MSL_M` | Wysokość nad średnim poziomem morza z GGA, w metrach z 3 miejscami; może być ujemna |
 
 RMC podaje prędkość w węzłach: **1 kn = 1,852 km/h**. Parser przelicza ją
 do tysięcznych km/h z zaokrągleniem. Nie wyliczamy jej z różnic kolejnych
 współrzędnych. Liczba miejsc po przecinku opisuje format, nie dokładność GPS.
 
-Każdy rekord kopiuje pozycję i prędkość dostępne **przy odczycie próbki IMU
-z FIFO**, przed oczekiwaniem na zapis SD. Przy GPS ustawionym na 1 Hz wiele
+Każdy rekord kopiuje pozycję, prędkość i wysokość dostępne **przy odczycie próbki IMU
+z FIFO**, przed oczekiwaniem na zapis SD. Przy GPS ustawionym na **5 Hz** wiele
 wierszy IMU 104 Hz będzie miało te same dane GPS. Nie są one interpolowane
 do 104 Hz ani wstecz do oszacowanej chwili próbkowania FIFO; to ostatnie
 odebrane dane nawigacyjne, nie rozwiązanie GPS dla każdej próbki akcelerometru.
@@ -103,14 +104,17 @@ odebrane dane nawigacyjne, nie rozwiązanie GPS dla każdej próbki akcelerometr
 Bez fixa, po jego utracie albo po upływie 3 s od ostatniej wartości odpowiednie
 pola GPS są **puste**. Pusta prędkość w RMC nie jest zamieniana na zero;
 ważne `0.000` oznacza odebraną prędkość zerową. GGA może odświeżyć pozycję,
-ale nie odświeża prędkości RMC. Data/czas mają własną kontrolę ważności,
+ale nie odświeża prędkości RMC. Analogicznie RMC nie odświeża wysokości GGA.
+Ważne `0.000` w wysokości oznacza poziom morza, a brak wartości pozostaje
+pustym polem. Jest to wysokość MSL, nie nad elipsoidą ani nad lokalnym gruntem.
+Data/czas mają własną kontrolę ważności,
 więc brak współrzędnych lub prędkości nie zatrzymuje pozostałych pomiarów.
 
 DATA i CZAS są w **UTC**. Czas zawiera milisekundy. Bez ważnej, świeżej daty
 i godziny z GPS oba pola są puste — pomiary nadal są zapisywane:
 
 ```text
-2;;;0.000488;-1.000000;16.000000;0.070;-70.000;2000.000;;;
+2;;;0.000488;-1.000000;16.000000;0.070;-70.000;2000.000;;;;
 ```
 
 Parser zachowuje ułamek sekundy RMC. Między komunikatami UTC jest interpolowany
@@ -269,7 +273,7 @@ python3 /workspace/.laptune-setup/build.py Debug
 python3 /workspace/.laptune-setup/build.py Release
 ```
 
-Dziewięć programów testowych obejmuje dotychczasowe IMU/GPS/TFT, FIFO,
+Dziesięć programów testowych obejmuje dotychczasowe IMU/GPS/TFT, FIFO,
 kalendarz i znaczniki czasu, zapis rzeczywistym FatFs na obrazie FAT w RAM,
 format rekordów, ochronę wcześniejszych plików, błędy i pełną kartę,
 automatyczny podział co 3 minuty, ciągłość numeracji i kolejki przy zmianie
@@ -288,7 +292,10 @@ karty, ponowne włożenie tej samej i innej karty, zachowanie plików i luk w NR
 B1 z filtrowaniem zboczy, ręczna pauza ponawiania, pełna karta bez tworzenia
 pustych plików, powrót IMU po awarii oraz odstęp ponawiania przy zawinięciu zegara.
 Zapis GPS jest sprawdzany z produkcyjnym parserem RMC/GGA i FatFs: dokładnie
-12 kolumn, konwersja węzłów na km/h, zachowanie migawki w kolejce po zmianie
+13 kolumn, konwersja węzłów na km/h, wysokość MSL (dodatnia/ujemna/zerowa/brak),
+zachowanie migawki w kolejce po zmianie
 fixa, N/E i S/W, prawidłowe zera, brak fixa, brak prędkości, niezależna
 świeżość pól oraz upływ czasu przez zawinięcie licznika STM32.
+Oddzielny model GPS potwierdza ustawienie i odczyt zwrotny 5 Hz, UART 38400,
+RMC/GGA na każdy pomiar, ponowne rozpoznanie po restarcie i obsługę błędów.
 Testy programowe nie potwierdzają elektryki modułu ani działania fizycznej karty.

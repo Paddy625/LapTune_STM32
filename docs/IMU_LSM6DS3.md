@@ -91,8 +91,8 @@ GX-2000.0 -0070.1 +2000.0
 
 Wiersze AX/GX, AY/GY, AZ/GZ zaczynają się odpowiednio na y=18/26, 36/44,
 54/62, czcionka 5×7 ze skalą 1. Każdy zajmuje 8 pikseli wysokości.
-GPS nadal zajmuje y=72..119; jego kod, kolory, teksty i odświeżanie nie
-zostały zmienione. Nagłówek jest zachowany; stopka pokazuje teraz status SD.
+GPS zajmuje y=72..119; jego konfigurację 5 Hz i odświeżanie co 200 ms opisuje
+[GPS_NEO6M.md](GPS_NEO6M.md). Nagłówek jest zachowany; stopka pokazuje status SD.
 
 Minima i maksima obu czujników są inicjalizowane pierwszą poprawną próbką
 oraz aktualizowane po każdym udanym odczycie. Zmienne żyroskopu to

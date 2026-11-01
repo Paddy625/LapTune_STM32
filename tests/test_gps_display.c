@@ -22,20 +22,29 @@ int main(void)
                      .year=2026, .month=10, .day=20, .hour=12, .minute=35, .second=19, .satellites=8};
     const char *expected[] = {"GPS FIX S:08", "LAT -34.9333333", "LON -058.3666667", "ALT -12.3 M", "UTC 12:35:19", "DATE 2026-10-20"};
     for (unsigned i=0; i<6; ++i) {
-        assert(GPSDisplay_Update(0,&data)==HAL_OK);
+        assert(GPSDisplay_Update(0,&data,NULL)==HAL_OK);
         assert(strncmp(last,expected[i],strlen(expected[i]))==0);
         data.latitude_e7 = 0; /* Frame must retain the original snapshot. */
     }
-    assert(GPSDisplay_Update(499,&data)==HAL_OK && calls==6);
+    assert(GPSDisplay_Update(199,&data,NULL)==HAL_OK && calls==6);
     memset(&data,0,sizeof(data));
     const char *invalid[] = {"GPS NO DATA", "LAT ---", "LON ---", "ALT --- M", "UTC --:--:--", "DATE ----/--/--"};
     for (unsigned i=0; i<6; ++i) {
-        assert(GPSDisplay_Update(500,&data)==HAL_OK);
+        assert(GPSDisplay_Update(200,&data,NULL)==HAL_OK);
         assert(strncmp(last,invalid[i],strlen(invalid[i]))==0);
         for (size_t j=strlen(invalid[i]); j<25; ++j) assert(last[j]==' ');
     }
     data.connected=1;
-    assert(GPSDisplay_Update(1000,&data)==HAL_OK);
+    assert(GPSDisplay_Update(400,&data,NULL)==HAL_OK);
     assert(strncmp(last,"GPS NO FIX S:00",15)==0);
+    for (unsigned i=0;i<5;++i) assert(GPSDisplay_Update(400,&data,NULL)==HAL_OK);
+    GPS_ConfigStatus cfg={.state=GPS_CONFIG_READY,.measurement_ms=200,.nav_rate=1,.time_ref=1};
+    assert(GPSDisplay_Update(600,&data,&cfg)==HAL_OK && !strncmp(last,"GPS NO FIX 5HZ S:00",18));
+    for (unsigned i=0;i<5;++i) assert(GPSDisplay_Update(600,&data,&cfg)==HAL_OK);
+    cfg.state=GPS_CONFIG_ERROR;
+    assert(GPSDisplay_Update(800,&data,&cfg)==HAL_OK && !strncmp(last,"GPS CFG ERROR",13));
+    for (unsigned i=0;i<5;++i) assert(GPSDisplay_Update(800,&data,&cfg)==HAL_OK);
+    cfg.state=GPS_CONFIG_PENDING;
+    assert(GPSDisplay_Update(1000,&data,&cfg)==HAL_OK && !strncmp(last,"GPS SETUP",9));
     puts("PASS GPS UI: bounds, snapshot, coordinates/MSL/UTC/date, no data/fix, old digits cleared");
 }

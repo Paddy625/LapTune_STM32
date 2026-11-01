@@ -77,7 +77,7 @@ static char *read_log(const char *name,unsigned rows)
         char *end=strstr(p,"\r\n"); assert(end);
         unsigned columns=0;
         for (char *q=p;q<end;++q) if (*q==';') ++columns;
-        assert(columns==11); ++lines; p=end+2;
+        assert(columns==12); ++lines; p=end+2;
     }
     assert(lines==rows+1U);
     return text;
@@ -96,7 +96,7 @@ static void test_automatic_rotation(void)
     assert(sd_log_state==LOG_RECORDING && !strcmp(sd_log_filename,"LOG0002.TXT"));
     assert(sd_log_written==100 && !sd_log_dropped);
     char *first=read_log("LOG0001.TXT",100);
-    assert(strstr(first,"100;;;1.000000;2.000000;3.000000;4.000;5.000;6.000;;;\r\n"));
+    assert(strstr(first,"100;;;1.000000;2.000000;3.000000;4.000;5.000;6.000;;;;\r\n"));
     assert(!strstr(first,"101;;;"));
     uint32_t second_start=tick;
     SDLogger_Process(tick); assert(sd_log_written==101);
@@ -283,6 +283,7 @@ static void expect_navigation(const char *text,unsigned row,const char *expected
     const char *p=text;
     for (unsigned i=0;i<row;++i) { p=strstr(p,"\r\n"); assert(p); p+=2; }
     for (unsigned i=0;i<9;++i) { p=strchr(p,';'); assert(p); ++p; }
+    if (strncmp(p,expected,strlen(expected))) fprintf(stderr,"Navigation row %u: expected [%s], got [%.*s]\n",row,expected,(int)(strstr(p,"\r\n")-p+2),p);
     assert(!strncmp(p,expected,strlen(expected)));
 }
 static void test_navigation_log(void)
@@ -312,25 +313,61 @@ static void test_navigation_log(void)
     for (unsigned i=0;i<10 && sd_log_state==LOG_RECORDING;++i) SDLogger_Process(tick);
     assert(sd_log_state==LOG_STOPPED && sd_log_written==10 && !sd_log_dropped);
     char *text=read_log("LOG0001.TXT",10);
-    assert(strstr(text,"1;2026-10-26;12:34:56.123;0.000488;-1.000000;16.000000;0.070;-70.000;2000.000;52.2297000;21.0122000;41.485\r\n"));
-    expect_navigation(text,2,"-34.9333333;-58.3666667;185.200\r\n");
-    expect_navigation(text,3,"0.0000000;0.0000000;0.000\r\n");
-    expect_navigation(text,4,"0.0000000;0.0000000;\r\n");
-    expect_navigation(text,5,";;\r\n");
-    expect_navigation(text,6,"52.2297000;21.0122000;18.520\r\n");
-    expect_navigation(text,7,";;\r\n");
-    expect_navigation(text,8,"48.1173000;11.5166667;\r\n");
-    expect_navigation(text,9,";;18.520\r\n");
-    expect_navigation(text,10,";;\r\n"); free(text);
+    assert(strstr(text,"1;2026-10-26;12:34:56.123;0.000488;-1.000000;16.000000;0.070;-70.000;2000.000;52.2297000;21.0122000;41.485;\r\n"));
+    expect_navigation(text,2,"-34.9333333;-58.3666667;185.200;\r\n");
+    expect_navigation(text,3,"0.0000000;0.0000000;0.000;\r\n");
+    expect_navigation(text,4,"0.0000000;0.0000000;;\r\n");
+    expect_navigation(text,5,";;;\r\n");
+    expect_navigation(text,6,"52.2297000;21.0122000;18.520;\r\n");
+    expect_navigation(text,7,";;;\r\n");
+    expect_navigation(text,8,"48.1173000;11.5166667;;100.000\r\n");
+    expect_navigation(text,9,";;18.520;100.000\r\n");
+    expect_navigation(text,10,";;;\r\n"); free(text);
 
     fresh_card(UINT32_MAX-1000U); SDLogger_Start(); GPS_NMEA_Init(&gps);
     parse_fix(&gps,"GPRMC,123456,A,9000.000,S,18000.000,W,0,0,261026");
+    gps.altitude_valid=1; gps.altitude_mm=-12345; gps.altitude_ms=tick;
     tick+=GPS_FRESH_MS-1U; SDLogger_Append(&s,t,&gps);
     ++tick; SDLogger_Append(&s,t,&gps); SDLogger_RequestStop(); SDLogger_Process(tick);
     assert(sd_log_state==LOG_STOPPED);
     text=read_log("LOG0001.TXT",2);
-    expect_navigation(text,1,"-90.0000000;-180.0000000;0.000\r\n");
-    expect_navigation(text,2,";;\r\n"); free(text);
+    expect_navigation(text,1,"-90.0000000;-180.0000000;0.000;-12.345\r\n");
+    expect_navigation(text,2,";;;\r\n"); free(text);
+}
+static void test_msl_log(void)
+{
+    fresh_card(1000); SDLogger_Start(); GPS_Data gps; GPS_NMEA_Init(&gps);
+    LSM6DS3_Sample s={1,2,3,4,5,6}; LogTime t={0};
+    parse_fix(&gps,"GPRMC,123456,A,5213.782,N,02100.732,E,10,0,011126");
+    parse_fix(&gps,"GPGGA,123456,5213.782,N,02100.732,E,1,08,0.9,123.456,M,46.9,M,,");
+    SDLogger_Append(&s,t,&gps);
+    tick+=200; parse_fix(&gps,"GPGGA,123456.20,5213.782,N,02100.732,E,1,08,0.9,-12.345,M,46.9,M,,");
+    SDLogger_Append(&s,t,&gps);
+    tick+=200; parse_fix(&gps,"GPGGA,123456.40,5213.782,N,02100.732,E,1,08,0.9,0.000,M,46.9,M,,");
+    SDLogger_Append(&s,t,&gps);
+    tick+=200; parse_fix(&gps,"GPGGA,123456.60,5213.782,N,02100.732,E,1,08,0.9,,M,46.9,M,,");
+    SDLogger_Append(&s,t,&gps);
+    parse_fix(&gps,"GPGGA,123456.60,5213.782,N,02100.732,E,1,08,0.9,500.125,M,46.9,M,,");
+    tick+=GPS_FRESH_MS; parse_fix(&gps,"GPRMC,123459.60,A,5213.782,N,02100.732,E,10,0,011126");
+    SDLogger_Append(&s,t,&gps); /* Fresh RMC must not refresh old altitude. */
+    tick+=200; parse_fix(&gps,"GPGGA,123459.80,5213.782,N,02100.732,E,1,08,0.9,-0.001,M,46.9,M,,");
+    SDLogger_Append(&s,t,&gps);
+    parse_fix(&gps,"GPGGA,123459.80,,,,,0,00,99.99,,,,,,"); SDLogger_Append(&s,t,&gps);
+    GPS_NMEA_Init(&gps);
+    parse_fix(&gps,"GPGGA,123500,5213.782,N,02100.732,E,1,08,0.9,33.4,M,46.9,M,,");
+    SDLogger_Append(&s,t,&gps); /* GGA altitude without RMC/date/speed is valid. */
+    SDLogger_RequestStop();
+    for (unsigned i=0;i<10 && sd_log_state==LOG_RECORDING;++i) SDLogger_Process(tick);
+    assert(sd_log_state==LOG_STOPPED && sd_log_written==8);
+    char *text=read_log("LOG0001.TXT",8);
+    expect_navigation(text,1,"52.2297000;21.0122000;18.520;123.456\r\n");
+    expect_navigation(text,2,"52.2297000;21.0122000;18.520;-12.345\r\n");
+    expect_navigation(text,3,"52.2297000;21.0122000;18.520;0.000\r\n");
+    expect_navigation(text,4,"52.2297000;21.0122000;18.520;\r\n");
+    expect_navigation(text,5,"52.2297000;21.0122000;18.520;\r\n");
+    expect_navigation(text,6,"52.2297000;21.0122000;18.520;-0.001\r\n");
+    expect_navigation(text,7,";;;\r\n");
+    expect_navigation(text,8,"52.2297000;21.0122000;;33.400\r\n"); free(text);
 }
 int main(void)
 {
@@ -353,15 +390,15 @@ int main(void)
     assert(f_open(&f,"LOG0002.TXT",FA_READ)==FR_OK);
     char *text=calloc(20000,1); assert(text);
     assert(f_read(&f,text,19999,&done)==FR_OK && done>8000); assert(f_close(&f)==FR_OK);
-    static const char header[]="NR;DATA;CZAS;ACC_X;ACC_Y;ACC_Z;GYRO_X;GYRO_Y;GYRO_Z;GPS_LAT;GPS_LON;GPS_SPEED_KMH\r\n";
+    static const char header[]="NR;DATA;CZAS;ACC_X;ACC_Y;ACC_Z;GYRO_X;GYRO_Y;GYRO_Z;GPS_LAT;GPS_LON;GPS_SPEED_KMH;GPS_ALT_MSL_M\r\n";
     assert(!strncmp(text,header,sizeof(header)-1U));
-    assert(strstr(text,"1;2026-10-26;12:34:56.123;0.000488;-1.000000;16.000000;0.070;-70.000;2000.000;;;\r\n"));
-    assert(strstr(text,"101;;;1.000000;2.000000;3.000000;4.000;5.000;6.000;;;\r\n"));
+    assert(strstr(text,"1;2026-10-26;12:34:56.123;0.000488;-1.000000;16.000000;0.070;-70.000;2000.000;;;;\r\n"));
+    assert(strstr(text,"101;;;1.000000;2.000000;3.000000;4.000;5.000;6.000;;;;\r\n"));
     unsigned lines=0;
     for (char *p=text;*p;) {
         char *end=strstr(p,"\r\n"); assert(end); unsigned columns=0;
         for (char *q=p;q<end;++q) if (*q==';') ++columns;
-        assert(columns==11); ++lines; p=end+2;
+        assert(columns==12); ++lines; p=end+2;
     }
     assert(lines==102);
     assert(f_open(&f,"LOG0001.TXT",FA_READ)==FR_OK); char old[9]={0};
@@ -388,7 +425,7 @@ int main(void)
     free(text);
     test_automatic_rotation(); test_stop_and_tick_wrap(); test_rotation_error(); test_sync_and_restart(); test_error_messages();
     test_auto_retry_and_reinsert(); test_retry_different_card(); test_button_pause_resume(); test_retry_wrap_and_acquisition_fault();
-    test_navigation_log();
+    test_navigation_log(); test_msl_log();
     free(image);
-    puts("PASS SD logger/FatFs: 12 columns, queued GPS/speed snapshots, no fix/stale/zero/wrap, rotation, retries, card replacement, B1 and faults");
+    puts("PASS SD logger/FatFs: 13 columns, queued GPS/speed snapshots, no fix/stale/zero/wrap, rotation, retries, card replacement, B1 and faults");
 }

@@ -215,7 +215,7 @@ int main(void)
                           sensor_ok && have_sample) != HAL_OK) {
       Error_Handler();
     }
-    if (GPSDisplay_Update(HAL_GetTick(), GPS_GetData()) != HAL_OK) {
+    if (GPSDisplay_Update(HAL_GetTick(), GPS_GetData(), GPS_GetConfig()) != HAL_OK) {
       Error_Handler();
     }
     if (ShowLogState()!=HAL_OK) Error_Handler();
@@ -354,7 +354,7 @@ static void MX_USART2_UART_Init(void)
 }
 
 /**
-  * @brief USART3: NEO-6M default NMEA, 9600 baud, 8N1.
+  * @brief USART3: bootstrap at 9600 baud; GPS driver discovers/configures 38400 baud, 5 Hz.
   */
 static void MX_USART3_UART_Init(void)
 {
