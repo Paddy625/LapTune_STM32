@@ -1,219 +1,46 @@
-# Zapis pomiarów na microSD
+# Zapis na microSD — P0
 
-Czytnik ze zdjęcia ma piny **3V3, CS, MOSI, CLK, MISO, GND** i pracuje przy
-3,3 V. SD współdzieli **SPI1 z TFT**. IMU pozostaje na osobnym SPI2.
+Moduł ze zdjęcia: **3,3 V**, wspólne SPI1 z TFT, osobne CS. Aktualny kontrakt
+logu i sesji: [P0_LOGGER.md](P0_LOGGER.md). Nie formatuj karty z firmware.
+Obsługiwane FAT12/16/32, 512-bajtowe sektory; exFAT nie jest obsługiwany.
 
-![Połączenia SD i TFT](wiring_sd.png)
+## Połączenia
 
-## Podłączenie
-
-| Czytnik SD | NUCLEO-F103RB | Złącze |
-| --- | --- | --- |
-| 3V3 | 3V3 | CN6/4 |
-| CS | PB0 / A3 | CN8/4, także CN7/34 |
-| MOSI | PA7 / D11 | CN5/4, wspólne z SDA TFT |
-| CLK | PA5 / D13 | CN5/6, wspólne z SCK TFT |
-| MISO | PA6 / D12 | CN5/5 |
-| GND | GND | np. CN6/6 |
-
-CS wyświetlacza pozostaje na PB6 / D10. TFT nie wymaga MISO; GT_SO pozostaje
-niepodłączone. Kod nigdy nie wybiera obu urządzeń jednocześnie. SPI1 pracuje
-w trybie 0. TFT nadal pracuje przy 8 MHz, a **SD przy 2 MHz**; inicjalizacja
-karty odbywa się przy 250 kHz. Zmiana prędkości odbywa się przy nieaktywnych
-CS, a po operacji SD przywracana jest prędkość TFT. Sterownik zwalnia CS SD
-i wysyła dodatkowe takty również między poleceniami inicjalizacji.
-Nie zmienia się żadne połączenie GPS ani IMU.
-
-Ten czytnik zasilaj **3,3 V**, nie 5 V. Przewody SPI powinny być krótkie.
-Przy niestabilnym zasilaniu sprawdź je podczas zapisu; karta może pobierać
-większy prąd chwilowy niż wartość średnia z opisu modułu.
-
-## Pliki i format
-
-Karta musi mieć już system plików **FAT16 lub FAT32**, sektor 512 B. Zalecana
-karta microSDHC do 32 GB. Karty SDXC są możliwe po przygotowaniu FAT32;
-fabryczny exFAT nie jest obsługiwany. Firmware **nie formatuje karty**.
-Starsze karty SDSC, w tym **256 MB z FAT16** (w Windows często oznaczone
-po prostu jako „FAT”), również są obsługiwane, z adresowaniem bajtowym.
-
-Standardowa odpowiedź starszej SD na CMD8 to `05`. Dla zgłoszonej na sprzęcie
-odpowiedzi `00` (oraz `04`) sterownik ponawia pełną sekwencję CMD0/CMD8
-maksymalnie trzy razy. Jeśli odpowiedź pozostaje taka sama, próbuje inicjalizacji
-starszej SD przez CMD55/ACMD41 bez HCS. Zapis jest dopuszczany dopiero po
-poprawnym zakończeniu ACMD41, potwierdzeniu adresowania bajtowego w OCR,
-ustawieniu bloku 512 B oraz odczycie CSD v1 z poprawnym CRC i pojemnością.
-Odpowiedź `00` sama nie dowodzi, że karta jest starszą SD. Błąd CRC polecenia,
-brak odpowiedzi, niepoprawne R7 lub sprzeczne OCR/CSD nadal przerywają start.
-MMC nie jest obsługiwane.
-
-Po zakończeniu ACMD41 sterownik czeka do około sekundy na ustawienie bitu
-gotowości w OCR, ponawiając CMD58. Nadal wymaga obsługi zakresu napięcia
-3,2–3,4 V, zgodności adresowania z rozpoznanym typem SD oraz poprawnego CSD.
-Nie akceptuje OCR z samymi jedynkami. Pełna wartość OCR jest zachowywana
-do diagnostyki zamiast wyświetlania samej odpowiedzi R1 `00`.
-
-Reset CMD0 jest ponawiany przez maksymalnie około sekundę. Dla starszych kart
-odrzucenie CMD59 jako nieobsługiwanego polecenia nie przerywa inicjalizacji.
-Sterownik nadal sprawdza CRC16 odczytanych danych i wysyła poprawne CRC przy
-zapisie; jeśli karta odrzuci CMD59, sprawdzanie CRC zapisu po stronie karty
-pozostaje wyłączone. Potwierdzenie zapisu może być poprzedzone bajtami `0xFF`;
-sterownik oczekuje na właściwy token w ograniczonej liczbie taktów.
-
-Zapis rozpoczyna się automatycznie po uruchomieniu. Co **3 minuty** logger
-dopisuje bufor do bieżącego pliku, zamyka go i automatycznie otwiera kolejny.
-Nie wymaga to naciśnięcia B1. Powstają pliki od `LOG0001.TXT` do `LOG9999.TXT`,
-zawsze z pominięciem istniejących nazw, bez nadpisywania wcześniejszych danych.
-Po wyczerpaniu miejsca lub dostępnych nazw pojawia się `SD FULL`; logger
-okresowo ponawia montowanie, np. po wymianie karty na inną. Sprawdza wolne
-klastry przed utworzeniem pliku, więc pełna karta nie otrzymuje nowego pustego
-pliku przy każdej próbie.
-
-NR liczy poprawnie odczytane próbki od uruchomienia i **nie zeruje się przy
-zmianie pliku, ponownym montowaniu ani wznowieniu przez B1**. Próbki odebrane
-w czasie inicjalizacji, braku karty lub ręcznej pauzy także zwiększają licznik,
-ale nie trafiają do pliku. Luki w NR pokazują więc przerwę w zapisie;
-pierwszy zapisany wiersz może mieć numer większy od 1. Każdy plik ma nagłówek:
-
-```text
-NR;DATA;CZAS;ACC_X;ACC_Y;ACC_Z;GYRO_X;GYRO_Y;GYRO_Z;GPS_LAT;GPS_LON;GPS_SPEED_KMH;GPS_ALT_MSL_M
-1;2026-11-01;12:34:56.200;0.000488;-1.000000;16.000000;0.070;-70.000;2000.000;52.2297000;21.0122000;41.485;123.456
-```
-
-Pola oddziela średnik, separator dziesiętny to kropka, końce wierszy to CRLF.
-ACC jest w g z 6 miejscami po przecinku; GYRO w °/s z 3 miejscami. Precyzja
-zapisu jest większa niż na ekranie i nie oznacza takiej dokładności czujnika.
-Nowe pliki mają **13 kolumn**. Cztery kolumny GPS są dopisane na końcu:
-
-| Kolumna | Jednostka i znaczenie |
+| Czytnik SD | Nucleo-F103RB |
 | --- | --- |
-| `GPS_LAT` | Szerokość w stopniach dziesiętnych, 7 miejsc; N dodatnie, S ujemne |
-| `GPS_LON` | Długość w stopniach dziesiętnych, 7 miejsc; E dodatnie, W ujemne |
-| `GPS_SPEED_KMH` | Prędkość pozioma względem ziemi z RMC, w km/h z 3 miejscami |
-| `GPS_ALT_MSL_M` | Wysokość nad średnim poziomem morza z GGA, w metrach z 3 miejscami; może być ujemna |
+| 3V3 | 3V3 |
+| GND | GND |
+| CLK | PA5 / D13 / SPI1_SCK |
+| MOSI | PA7 / D11 / SPI1_MOSI |
+| MISO | PA6 / D12 / SPI1_MISO |
+| CS | PB0 / A3 / CN8/4 |
 
-RMC podaje prędkość w węzłach: **1 kn = 1,852 km/h**. Parser przelicza ją
-do tysięcznych km/h z zaokrągleniem. Nie wyliczamy jej z różnic kolejnych
-współrzędnych. Liczba miejsc po przecinku opisuje format, nie dokładność GPS.
+TFT pozostaje na SPI1 (CS PB6), IMU na SPI2 (CS PB12). Sterownik podnosi
+CS drugiego urządzenia i dobiera szybkość: inicjalizacja SD 250 kHz,
+zapis SD 2 MHz, TFT 8 MHz. Nie podłączaj modułu 3,3 V do sygnałów 5 V.
+[Dotychczasowy rysunek SPI/SD](wiring_sd.svg) nie zawiera nowych przewodów
+INT1/INT2 — te dodaje schemat w [P0_LOGGER.md](P0_LOGGER.md).
 
-Każdy rekord kopiuje pozycję, prędkość i wysokość dostępne **przy odczycie próbki IMU
-z FIFO**, przed oczekiwaniem na zapis SD. Przy GPS ustawionym na **5 Hz** wiele
-wierszy IMU 104 Hz będzie miało te same dane GPS. Nie są one interpolowane
-do 104 Hz ani wstecz do oszacowanej chwili próbkowania FIFO; to ostatnie
-odebrane dane nawigacyjne, nie rozwiązanie GPS dla każdej próbki akcelerometru.
+## Pliki i obsługa
 
-Bez fixa, po jego utracie albo po upływie 3 s od ostatniej wartości odpowiednie
-pola GPS są **puste**. Pusta prędkość w RMC nie jest zamieniana na zero;
-ważne `0.000` oznacza odebraną prędkość zerową. GGA może odświeżyć pozycję,
-ale nie odświeża prędkości RMC. Analogicznie RMC nie odświeża wysokości GGA.
-Ważne `0.000` w wysokości oznacza poziom morza, a brak wartości pozostaje
-pustym polem. Jest to wysokość MSL, nie nad elipsoidą ani nad lokalnym gruntem.
-Data/czas mają własną kontrolę ważności,
-więc brak współrzędnych lub prędkości nie zatrzymuje pozostałych pomiarów.
+Każde uruchomienie ma własny folder `S<UID>-<BOOT_COUNTER>` z `SESSION.json`
+i plikami `LOG0001.TXT`, `LOG0002.TXT` itd. Numery rosną także po ponownym
+włożeniu karty. Plik obraca się co 180 s, synchronizacja jest wykonywana
+co około 1 s. B1 zatrzymuje zapis i zamyka plik; ponowne naciśnięcie wznawia
+zapis w nowym pliku tej samej sesji. Zmiana mocowania wymaga nowej sesji/resetu.
+Po błędzie montowanie jest ponawiane co 2 s. Nie odtwarzamy cache starego
+systemu plików na nowo włożonej karcie.
 
-DATA i CZAS są w **UTC**. Czas zawiera milisekundy. Bez ważnej, świeżej daty
-i godziny z GPS oba pola są puste — pomiary nadal są zapisywane:
+DRDY i SPI2 DMA działają także podczas SD/TFT. Pierścień 255 rekordów
+przechowuje około 2,45 s IMU przy 104 Hz. Kolejka zapisu ma 16 rekordów.
+Po przepełnieniu nie wstawiamy sztucznych próbek: luki NR oraz liczniki
+`IMU_DROPPED`, `IMU_MISSED_DRDY`, `SD_QUEUE_DROPPED` ujawniają utratę danych.
+Błędy osi są oddzielone od błędów karty; sześć pól wektorów jest wtedy pustych.
 
-```text
-2;;;0.000488;-1.000000;16.000000;0.070;-70.000;2000.000;;;;
-```
-
-Parser zachowuje ułamek sekundy RMC. Między komunikatami UTC jest interpolowany
-zegarem STM32. Chwila próbki z kolejki FIFO jest oszacowana według liczby
-oczekujących próbek i nominalnej ODR 104 Hz. Nadal nie ma obsługi PPS:
-opóźnienie UART/GPS, faza próbkowania i dryf zegarów powodują błąd czasu.
-**Trzy cyfry milisekund nie oznaczają dokładności 1 ms względem UTC.**
-Kolejna ramka GPS może skorygować interpolowany czas; kolejność rekordów
-określa NR. Do ścisłego powiązania próbek z UTC potrzebna jest synchronizacja PPS.
-Bez świeżego odniesienia czasu (3 s), dla zbyt starej próbki lub sekundy
-przestępnej pola czasu pozostają puste. Nie są zastępowane datą z komputera.
-
-Odstęp między plikami wyznacza zegar STM32, niezależnie od odbioru GPS i korekt
-UTC. Trzy minuty są przybliżone: opróżnienie bufora, zamknięcie i otwarcie
-pliku wymagają czasu. Próbki napływające podczas przejścia pozostają w kolejce
-RAM i trafiają do następnego pliku. Czas liczony jest od otwarcia nowego pliku.
-
-## Odczyt i zapis
-
-LSM6DS3 zapisuje gyro XYZ i accel XYZ do własnego FIFO przy 104 Hz,
-bez decymacji. Pętla odczytuje kompletne zestawy. Dzięki FIFO zapis na kartę
-nie wymaga zatrzymania czujnika; zniknęło wcześniejsze odpytywanie rejestrów
-wyjściowych co 10 ms. Min/max i TFT korzystają z tych samych odczytanych próbek.
-
-Sterownik SD podczas oczekiwania na kartę co kilka ms obsługuje SPI2/FIFO i
-parser GPS. Ten callback nie rysuje TFT i nie wywołuje FatFs. Osobna kolejka
-RAM mieści 128 rekordów (około 1,2 s przy 104 Hz). Zapis jest grupowany w
-buforze 1024 B; `f_sync()` odbywa się co około sekundę. `f_close()` zamyka plik
-automatycznie co 3 minuty albo po opcjonalnym zatrzymaniu przez B1.
-FatFs i logger pracują tylko w głównej pętli, nie w przerwaniu. Podczas długiego
-zapisu rysowanie TFT może chwilowo zwolnić; obsługa IMU/GPS jest kontynuowana.
-
-Czasy można zmienić w `LapTune/Core/Inc/sd_logger.h`:
-
-```c
-#define SD_LOG_FILE_DURATION_MS 180000U  /* 3 minuty */
-#define SD_LOG_SYNC_INTERVAL_MS 1000U    /* około 1 sekundy */
-#define SD_LOG_RETRY_INTERVAL_MS 2000U   /* odstęp między próbami po błędzie */
-```
-
-Nie ma gwarancji zapisu przy dowolnie długim zablokowaniu/uszkodzeniu karty.
-Przepełnienie FIFO/RAM, utrata wyrównania danych, błąd SPI IMU lub brak próbek
-przez sekundę przerywają bieżący plik ze statusem `SD DATA LOSS`. Nowy plik
-może zostać otwarty po odstępie ponawiania; po awarii IMU logger czeka także
-na powrót poprawnych odczytów. Przy błędzie zapisu ostatni wiersz może być
-niepełny. Po odzyskaniu dostępu zapis jest kontynuowany w nowym pliku.
-
-## Ponawianie i wymiana karty
-
-Po błędzie inicjalizacji, odczytu/zapisu lub zapełnieniu karty próba montowania
-jest ponawiana **co 2 sekundy od zakończenia poprzedniej próby/obsługi błędu**.
-Dotyczy to też startu bez karty oraz wyjęcia karty w trakcie zapisu. Po włożeniu
-sprawnej karty FAT16/FAT32 logger automatycznie zakłada nowy plik i wraca do
-`SD REC`, bez resetowania Nucleo. Nie formatuje ani nie nadpisuje istniejących
-plików. Samo wykrycie błędu i próba inicjalizacji mają własne ograniczone
-czasy oczekiwania; nie jest to sprzętowe wykrywanie włożenia w ciągu 2 sekund.
-TFT może chwilowo zwolnić podczas próby, a callback nadal obsługuje IMU/GPS.
-
-Po błędzie karty uchwyt pliku i cache FAT są porzucane przed ponownym montowaniem.
-Stare rekordy z kolejki nie są odtwarzane na ponownie włożonej karcie: nie
-wiadomo, ile bajtów poprzedniej operacji zostało faktycznie zapisanych ani
-czy włożono tę samą kartę. Pomiary z okresu niedostępności karty są pomijane;
-RAM nie przechowuje całej sesji. NR i liczniki nie są zerowane przy wznowieniu.
-
-Ręczne zatrzymanie przez B1 **wyłącza ponawianie**, aby karta pozostawała
-zamknięta do bezpiecznego wyjęcia. Po wymianie karty naciśnij i puść B1
-ponownie, aby wznowić zapis w nowym pliku bez resetu. Obsługa B1 odrzuca
-powtórne zbocza w ciągu 200 ms i nie wykonuje operacji FatFs w przerwaniu.
-
-## Obsługa na płytce
-
-1. Włóż przygotowaną kartę. Jeśli Nucleo już pracuje, logger podejmie kolejną
-   próbę automatycznie, o ile nie został zatrzymany przez B1.
-2. Po utworzeniu pliku w stopce pojawi się `SD REC LOGxxxx.TXT`.
-3. Co 3 minuty bieżący plik jest zamykany i powstaje kolejny; stopka pokazuje
-   jego nową nazwę. Zapis trwa automatycznie przez całą sesję.
-4. Jeśli chcesz wyjąć kartę podczas pracy, **naciśnij i puść B1**. Przerwanie
-   przycisku tylko zgłasza żądanie; główna pętla dopisuje kolejkę i zamyka plik.
-   Wyjmuj kartę po pojawieniu się **`SD SAVED`**. Pomiary i ekran nadal działają.
-5. Po zatrzymaniu przez B1 naciśnij i puść go ponownie, aby wznowić zapis.
-
-Zamiast ogólnego `SD ERROR` stopka pokazuje teraz **`SD E…` z przyczyną**.
-`SD FULL` oznacza brak miejsca. `SD DATA LOSS` oznacza problem z ciągłością
-danych. Te statusy nie oznaczają bezpiecznie zamkniętej, kompletnej sesji.
-Bez karty IMU/GPS nadal pracują i wykonywane są kolejne próby montowania.
-`PAUSE E…`, `PAUSE FULL` lub `PAUSE LOSS` oznacza ręczne wstrzymanie ponawiania
-przez B1 po błędzie; nie potwierdza poprawnego zapisania poprzedniego pliku.
-
-Zapis danych nie wymaga pamiętania o B1: wcześniejsze, 3-minutowe pliki są już
-zamknięte, a bieżący plik jest dodatkowo synchronizowany co około sekundę.
-Przy prawidłowo działającej karcie i bez uszkodzenia systemu plików nagłe
-odłączenie zasilania naraża przede wszystkim dane od ostatniej synchronizacji
-oraz próbki pozostające w RAM, zamiast całej sesji.
-
-Nie jest to gwarancja utraty najwyżej jednej sekundy: zanik zasilania podczas
-wewnętrznego zapisu karty lub aktualizacji FAT może uszkodzić także system
-plików i wcześniejsze dane. Podział na pliki i synchronizacja ograniczają to
-ryzyko, lecz pełna ochrona wymaga podtrzymania zasilania wystarczającego do
-zakończenia zapisu. B1 pozostaje opcją bezpiecznego wyjęcia karty podczas pracy.
+`sd_log_written` oznacza rekordy przyjęte przez `f_write`, nie gwarancję
+trwałości flash. Rotacja i synchronizacja ograniczają skutki odłączenia
+zasilania; nagłe wyłączenie może uszkodzić aktualizowane struktury FAT.
+Przed wyjęciem podczas pracy nadal użyj B1 i zaczekaj na `SD SAVED`.
 
 ## Diagnostyka błędów
 
@@ -244,58 +71,14 @@ a nie numer polecenia i R1. Tę pełną wartość należy zanotować do diagnost
 Po błędzie najlepiej zanotować **całą treść stopki**. Sam napis „FAT” przy
 karcie 256 MB nie jest powodem do ponownego formatowania.
 
-W debuggerze: `sd_log_state`, `sd_log_filename`, `sd_log_written`,
-`sd_log_error` (FRESULT), `sd_log_dropped` oraz `sd_spi_diag` (przyczyna,
-polecenie, odpowiedź R1, token danych/statusu, status HAL i aktywacja CRC karty).
-Dodatkowo `cmd8_response`, `cmd8_retries` i `legacy_probe` w `sd_spi_diag`
-zachowują wynik rozpoznania CMD8, liczbę ponowień i użycie próby zgodności
-dla odpowiedzi `00`/`04`, także po przejściu do dalszych poleceń.
-`ocr` i `ocr_valid` zachowują pełny rejestr OCR i informację, czy odczytano
-wszystkie cztery bajty bez błędu HAL.
-Zachowywany jest pierwszy błąd — późniejszy nieudany `f_close()` go nie zastępuje.
-Written liczy wiersze przyjęte
-przez `f_write`, nie potwierdzenie trwałości pamięci flash. Dropped zlicza
-odrzucone rekordy, próbki odczytane podczas pauzy/braku karty oraz zdarzenia
-utraty ciągłości. Nie jest dokładnym licznikiem próbek utraconych w sprzętowym
-FIFO ani danych utraconych po wcześniejszym przyjęciu ich przez `f_write`.
-Oba liczniki są zachowywane przy automatycznym i ręcznym wznowieniu.
 
-## Biblioteka i testy
+W debuggerze: `sd_log_state`, `sd_log_filename`, `sd_log_session_dir`,
+`sd_log_written`, `sd_log_dropped`, `sd_max_pause_us`, `sd_log_error`,
+`sd_spi_diag`, `imu_diag`, `gps_diag`. Liczniki są wspólne dla sesji, nie pliku.
 
-FatFs R0.16 jest dołączony do `Core/FatFs` wraz z licencją i identyfikatorem
-źródłowego commita ST. Nie trzeba pobierać go przy budowaniu ani zmieniać
-ścieżek include w CubeIDE; folder Core jest już objęty kompilacją.
-Konfiguracja produkcyjna nie zawiera funkcji formatowania karty.
+## Testy
 
-```sh
-bash tests/run.sh
-python3 /workspace/.laptune-setup/build.py Debug
-python3 /workspace/.laptune-setup/build.py Release
-```
-
-Dziesięć programów testowych obejmuje dotychczasowe IMU/GPS/TFT, FIFO,
-kalendarz i znaczniki czasu, zapis rzeczywistym FatFs na obrazie FAT w RAM,
-format rekordów, ochronę wcześniejszych plików, błędy i pełną kartę,
-automatyczny podział co 3 minuty, ciągłość numeracji i kolejki przy zmianie
-pliku, B1 podczas przejścia, przepełnienie zegara STM32 i ponowne montowanie
-po utracie niesynchronizowanego bufora. Obejmują też protokół SDHC/SDSC,
-CRC, osobne CS i timeouty.
-Model karty obejmuje również starszą kartę SDSC 256 MB, odrzucenie CMD59,
-kilka nieudanych resetów przed poprawną odpowiedzią, oczekiwanie na ACMD41,
-opóźniony token potwierdzenia zapisu, CS między poleceniami, prędkości obu
-urządzeń i nowe komunikaty diagnostyczne (w tym nierozpoznany wolumin FAT).
-Testy CMD8 obejmują stałe odpowiedzi `00`/`04`, pojedyncze `00` przed poprawną
-odpowiedzią SD v2, odrzucenie CMD55, sprzeczne OCR/CSD oraz błędne R1 i R7.
-Testowane są również opóźniony bit gotowości OCR, jego pełna diagnostyka,
-odrzucenie niewłaściwego napięcia i samych jedynek, wielokrotne próby bez
-karty, ponowne włożenie tej samej i innej karty, zachowanie plików i luk w NR,
-B1 z filtrowaniem zboczy, ręczna pauza ponawiania, pełna karta bez tworzenia
-pustych plików, powrót IMU po awarii oraz odstęp ponawiania przy zawinięciu zegara.
-Zapis GPS jest sprawdzany z produkcyjnym parserem RMC/GGA i FatFs: dokładnie
-13 kolumn, konwersja węzłów na km/h, wysokość MSL (dodatnia/ujemna/zerowa/brak),
-zachowanie migawki w kolejce po zmianie
-fixa, N/E i S/W, prawidłowe zera, brak fixa, brak prędkości, niezależna
-świeżość pól oraz upływ czasu przez zawinięcie licznika STM32.
-Oddzielny model GPS potwierdza ustawienie i odczyt zwrotny 5 Hz, UART 38400,
-RMC/GGA na każdy pomiar, ponowne rozpoznanie po restarcie i obsługę błędów.
-Testy programowe nie potwierdzają elektryki modułu ani działania fizycznej karty.
+`bash tests/run.sh` uruchamia 14 programów z ASan/UBSan, w tym rzeczywisty
+FatFs na obrazie FAT w RAM, format 33 kolumn, JSON/LFN, rotację, B1,
+wyjmowanie i zmianę karty, błędy, pełny wolumin oraz 30 minut czasu
+symulowanego. Testy sprzętowe i ich ograniczenia: [P0_LOGGER.md](P0_LOGGER.md).

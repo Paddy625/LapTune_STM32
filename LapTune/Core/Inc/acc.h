@@ -41,6 +41,8 @@ typedef enum {
 
 extern SPI_HandleTypeDef hspi2;
 
+extern uint8_t lsm6ds3_registers[16],lsm6ds3_config_verified; /* Addresses 0x0A..0x19. */
+uint8_t LSM6DS3_ReadConfiguration(void);
 uint8_t LSM6DS3_Init(void);
 /* One burst reads gyro XYZ then accel XYZ. Failure/not-ready preserves *sample. */
 LSM6DS3_ReadResult LSM6DS3_ReadSample(LSM6DS3_Sample *sample);

@@ -81,6 +81,7 @@ int main(void)
     assert(registers[0x10]==0x44 && registers[0x11]==0x4C);
     assert(registers[0x12]==0x44 && registers[0x13]==0x04);
     assert(registers[0x18]==0x38 && registers[0x19]==0x38);
+    assert(LSM6DS3_ReadConfiguration() && lsm6ds3_registers[5]==0x69 && lsm6ds3_registers[6]==0x44 && lsm6ds3_registers[7]==0x4C);
     LSM6DS3_Sample s = {1,2,3,4,5,6}, old=s;
     assert(LSM6DS3_ReadSample(NULL)==LSM6DS3_READ_ERROR && !selected);
     for (uint8_t ready=0; ready<3; ++ready) {

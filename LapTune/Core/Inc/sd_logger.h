@@ -2,6 +2,7 @@
 #define LAPTUNE_SD_LOGGER_H
 #include "acc.h"
 #include "log_clock.h"
+#include "imu_stream.h"
 /* Elapsed STM32 time, independent of GPS reception and UTC corrections. */
 #define SD_LOG_FILE_DURATION_MS 180000U
 #define SD_LOG_SYNC_INTERVAL_MS 1000U
@@ -11,9 +12,11 @@ extern volatile LogState sd_log_state;
 extern volatile uint32_t sd_log_written, sd_log_dropped;
 extern volatile unsigned sd_log_error;
 extern char sd_log_filename[13];
+extern char sd_log_session_dir[64];
+extern volatile uint32_t sd_max_pause_us;
 void SDLogger_Start(void);
-/* Copy the current GPS fix into this record; NULL leaves GPS columns empty. */
-void SDLogger_Append(const LSM6DS3_Sample *sample,LogTime time,const GPS_Data *gps);
+uint8_t SDLogger_CanAccept(void);
+void SDLogger_AppendRaw(const ImuRecord *record,LogTime time);
 void SDLogger_Process(uint32_t now);
 void SDLogger_RequestStop(void);
 void SDLogger_RequestResume(void);

@@ -24,6 +24,15 @@ static uint8_t write_reg(uint8_t reg, uint8_t value)
     return status == HAL_OK;
 }
 
+uint8_t lsm6ds3_registers[16],lsm6ds3_config_verified;
+uint8_t LSM6DS3_ReadConfiguration(void)
+{
+    lsm6ds3_config_verified=0;
+    for (unsigned i=0;i<16;++i)
+        if (!read_regs((uint8_t)(0x0A+i),lsm6ds3_registers+i,1)) return 0;
+    return 1;
+}
+
 uint8_t LSM6DS3_Init(void)
 {
     static const uint8_t config[][2] = {
@@ -34,6 +43,7 @@ uint8_t LSM6DS3_Init(void)
         {LSM6DS3_CTRL1_XL, LSM6DS3_CTRL1_XL_CONF},
         {LSM6DS3_CTRL2_G,  LSM6DS3_CTRL2_G_CONF}
     };
+    lsm6ds3_config_verified=0;
     uint8_t value = 0;
     if (!read_regs(LSM6DS3_WHO_AM_I, &value, 1U) || value != LSM6DS3_DEVICE_ID) return 0;
     if (!write_reg(LSM6DS3_CTRL3_C, 0x01U)) return 0; /* Software reset. */

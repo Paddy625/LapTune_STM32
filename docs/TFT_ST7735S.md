@@ -73,11 +73,11 @@ sprawdź ich wyprowadzenia na nowej płytce KAmod.
   ma skalę 1. Min/max obu czujników startują od pierwszego pomiaru, nie zera.
   LSM6DS3 ma ODR 104 Hz, zakres ±16 g i BDU; przelicznik 0,488 mg/LSB.
   Żyroskop ±2000°/s jest odczytywany do gx/gy/gz i ma własne min/max na TFT.
-- `main.c`: odczyt FIFO IMU przy ODR 104 Hz, odświeżanie ekranu co 100 ms.
-  Wysyłany jest jeden wiersz IMU na obieg pętli; nie czyścimy całego ekranu
-  przy każdym pomiarze. Transmisje HAL są blokujące, więc okres odczytu ma jitter
-  i może opóźniać renderowanie. Próbki są buforowane w FIFO i kolejce loggera;
-  wykryta utrata ciągłości zatrzymuje zapis SD. Szczegóły w SD_LOGGING.md.
+- `main.c`: akwizycja IMU 104 Hz przez osobne DRDY i DMA SPI2, odświeżanie
+  ekranu co 100 ms. Jeden wiersz IMU na obieg pętli; bez czyszczenia całego
+  ekranu przy każdym pomiarze. Blokujące transmisje TFT mogą opóźnić render,
+  a akwizycja działa w przerwaniach. Próbki mają własne znaczniki i pierścień
+  RAM; straty są jawne w logu. Szczegóły w [P0_LOGGER.md](P0_LOGGER.md).
 - Nieudany odczyt SPI nie nadpisuje pomiaru śmieciami. Przy błędzie czujnika
   wartości są zastępowane czerwonymi kreskami; inicjalizacja jest ponawiana co
   sekundę. Błąd transmisji TFT prowadzi do `Error_Handler()`.

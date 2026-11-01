@@ -41,6 +41,7 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN PV */
+DMA_HandleTypeDef hdma_spi2_rx,hdma_spi2_tx;
 
 /* USER CODE END PV */
 
@@ -129,6 +130,25 @@ void HAL_SPI_MspInit(SPI_HandleTypeDef* hspi)
     HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
     /* USER CODE BEGIN SPI2_MspInit 1 */
+    HAL_NVIC_SetPriority(SPI2_IRQn,2,0); HAL_NVIC_EnableIRQ(SPI2_IRQn);
+    __HAL_RCC_DMA1_CLK_ENABLE();
+    hdma_spi2_rx.Instance=DMA1_Channel4;
+    hdma_spi2_rx.Init.Direction=DMA_PERIPH_TO_MEMORY;
+    hdma_spi2_rx.Init.PeriphInc=DMA_PINC_DISABLE;
+    hdma_spi2_rx.Init.MemInc=DMA_MINC_ENABLE;
+    hdma_spi2_rx.Init.PeriphDataAlignment=DMA_PDATAALIGN_BYTE;
+    hdma_spi2_rx.Init.MemDataAlignment=DMA_MDATAALIGN_BYTE;
+    hdma_spi2_rx.Init.Mode=DMA_NORMAL;
+    hdma_spi2_rx.Init.Priority=DMA_PRIORITY_VERY_HIGH;
+    if (HAL_DMA_Init(&hdma_spi2_rx)!=HAL_OK) Error_Handler();
+    __HAL_LINKDMA(hspi,hdmarx,hdma_spi2_rx);
+    hdma_spi2_tx.Instance=DMA1_Channel5;
+    hdma_spi2_tx.Init=hdma_spi2_rx.Init;
+    hdma_spi2_tx.Init.Direction=DMA_MEMORY_TO_PERIPH;
+    if (HAL_DMA_Init(&hdma_spi2_tx)!=HAL_OK) Error_Handler();
+    __HAL_LINKDMA(hspi,hdmatx,hdma_spi2_tx);
+    HAL_NVIC_SetPriority(DMA1_Channel4_IRQn,2,0); HAL_NVIC_EnableIRQ(DMA1_Channel4_IRQn);
+    HAL_NVIC_SetPriority(DMA1_Channel5_IRQn,2,0); HAL_NVIC_EnableIRQ(DMA1_Channel5_IRQn);
 
     /* USER CODE END SPI2_MspInit 1 */
 
@@ -165,6 +185,9 @@ void HAL_SPI_MspDeInit(SPI_HandleTypeDef* hspi)
     HAL_GPIO_DeInit(GPIOB, GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15);
 
     /* USER CODE BEGIN SPI2_MspDeInit 1 */
+    HAL_NVIC_DisableIRQ(SPI2_IRQn);
+    HAL_DMA_DeInit(hspi->hdmarx); HAL_DMA_DeInit(hspi->hdmatx);
+    HAL_NVIC_DisableIRQ(DMA1_Channel4_IRQn); HAL_NVIC_DisableIRQ(DMA1_Channel5_IRQn);
 
     /* USER CODE END SPI2_MspDeInit 1 */
   }
@@ -217,7 +240,7 @@ void HAL_UART_MspInit(UART_HandleTypeDef* huart)
     GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
     GPIO_InitStruct.Pull = GPIO_PULLUP;
     HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-    HAL_NVIC_SetPriority(USART3_IRQn, 1, 0);
+    HAL_NVIC_SetPriority(USART3_IRQn, 2, 0);
     HAL_NVIC_EnableIRQ(USART3_IRQn);
   }
 

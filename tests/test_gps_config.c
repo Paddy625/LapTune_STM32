@@ -7,8 +7,10 @@ static UART_HandleTypeDef uart;
 static uint8_t *target;
 static uint32_t tick,receiver_baud,last_nav;
 static uint16_t measurement,nav_rate,time_ref;
-static uint8_t message_rates[256];
+static uint8_t message_rates[2][256];
+uint64_t Timebase_NowUs(void) { return (uint64_t)tick*1000U; }
 static int powered,rx_connected,corrupt_reply,nak,nak_port,ignore_port,ignore_message,ignore_rate,fail_tx,fail_init,short_reply;
+static int drop_ack;
 static unsigned transmissions,port_sets,rate_polls;
 uint32_t HAL_GetTick(void) { return tick; }
 static void feed(const uint8_t *bytes,unsigned length)
@@ -26,7 +28,7 @@ static void reply(uint8_t cls,uint8_t id,const uint8_t *payload,unsigned len)
     if (corrupt_reply) { corrupt_reply=0; frame[7+len]^=1; }
     feed(frame,len+8);
 }
-static void ack(uint8_t id) { const uint8_t p[]={6,id}; reply(5,1,p,2); }
+static void ack(uint8_t id) { const uint8_t p[]={6,id}; if (!drop_ack) reply(5,1,p,2); }
 static void sentence(const char *body)
 {
     uint8_t sum=0; char line[160];
@@ -50,7 +52,7 @@ HAL_StatusTypeDef HAL_UART_Init(UART_HandleTypeDef *handle)
 }
 HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *handle,const uint8_t *p,uint16_t len,uint32_t timeout)
 {
-    assert(handle==&uart && timeout<=100 && len>=8 && p[0]==0xB5 && p[1]==0x62 && p[2]==6);
+    assert(handle==&uart && timeout<=100 && len>=8 && p[0]==0xB5 && p[1]==0x62 && (p[2]==6 || p[2]==0x0A));
     ++transmissions;
     if (fail_tx) return HAL_TIMEOUT;
     unsigned size=(unsigned)p[4]|((unsigned)p[5]<<8); assert(size+8==len);
@@ -58,6 +60,10 @@ HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *handle,const uint8_t *p,
     for (unsigned i=2;i<len-2U;++i) { a+=p[i]; b+=a; }
     assert(p[len-2]==a && p[len-1]==b);
     if (!powered || !rx_connected || receiver_baud!=uart.Init.BaudRate) return HAL_OK;
+    if (p[2]==0x0A) {
+        uint8_t version[70]={0}; memcpy(version,"7.03 TEST",9); memcpy(version+30,"00040007",8);
+        reply(0x0A,4,version,sizeof(version)); return HAL_OK;
+    }
     const uint8_t *payload=p+6;
     if (nak && p[3]==1 && size==3) { const uint8_t n[]={6,1}; reply(5,0,n,2); return HAL_OK; }
     switch (p[3]) {
@@ -77,11 +83,12 @@ HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *handle,const uint8_t *p,
         }
         break;
     case 1:
-        assert(payload[0]==0xF0);
-        if (size==3) { if (!ignore_message) message_rates[payload[1]]=payload[2]; ack(1); }
+        assert(payload[0]==0xF0 || payload[0]==1);
+        unsigned cls=payload[0]==1;
+        if (size==3) { if (!ignore_message) message_rates[cls][payload[1]]=payload[2]; ack(1); }
         else {
             assert(size==2);
-            uint8_t response[]={0xF0,payload[1],0,message_rates[payload[1]],0,0,0,0};
+            uint8_t response[]={payload[0],payload[1],0,message_rates[cls][payload[1]],0,0,0,0};
             if (short_reply) { response[2]=response[3]; reply(6,1,response,3); }
             else reply(6,1,response,sizeof(response));
         }
@@ -104,15 +111,14 @@ static void nav(void)
 {
     if (!powered || (uint32_t)(tick-last_nav)<measurement) return;
     last_nav=tick;
-    char body[140];
-    if (message_rates[0]) {
-        snprintf(body,sizeof(body),"GPGGA,1235%02u.%03u,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,",
-                 (unsigned)(19+tick/1000)%60,(unsigned)tick%1000); sentence(body);
-    }
-    if (message_rates[4]) {
-        snprintf(body,sizeof(body),"GPRMC,1235%02u.%03u,A,4807.038,N,01131.000,E,22.4,0,011126,,,A",
-                 (unsigned)(19+tick/1000)%60,(unsigned)tick%1000); sentence(body);
-    }
+    uint8_t pos[28]={0},vel[36]={0},sol[52]={0};
+    for (unsigned i=0;i<4;++i) { pos[i]=vel[i]=sol[i]=(uint8_t)((tick%604800000U)>>(8*i)); }
+    int32_t altitude=545400;
+    for (unsigned i=0;i<4;++i) pos[16+i]=(uint8_t)((uint32_t)altitude>>(8*i));
+    sol[10]=3; sol[11]=0x0D; sol[47]=8;
+    if (message_rates[1][2]) reply(1,2,pos,sizeof(pos));
+    if (message_rates[1][0x12]) reply(1,0x12,vel,sizeof(vel));
+    if (message_rates[1][6]) reply(1,6,sol,sizeof(sol));
 }
 static void step(void)
 {
@@ -122,8 +128,8 @@ static void step(void)
 static void reset(uint32_t baud,uint32_t start)
 {
     tick=start; receiver_baud=baud; last_nav=tick; measurement=1000; nav_rate=time_ref=1;
-    memset(message_rates,0,sizeof(message_rates)); for (unsigned i=0;i<=5;++i) message_rates[i]=1;
-    powered=rx_connected=1; corrupt_reply=nak=nak_port=ignore_port=ignore_message=ignore_rate=fail_tx=fail_init=short_reply=0;
+    memset(message_rates,0,sizeof(message_rates)); for (unsigned i=0;i<=5;++i) message_rates[0][i]=1;
+    drop_ack=0; powered=rx_connected=1; corrupt_reply=nak=nak_port=ignore_port=ignore_message=ignore_rate=fail_tx=fail_init=short_reply=0;
     transmissions=port_sets=rate_polls=0; target=NULL; uart.Init.BaudRate=GPS_BOOT_BAUD;
     assert(GPS_Init(&uart)==HAL_OK);
 }
@@ -138,8 +144,9 @@ static void check_ready(void)
     const GPS_ConfigStatus *c=GPS_GetConfig();
     assert(c->state==GPS_CONFIG_READY && c->error==GPS_CFG_OK && c->baud==GPS_RUN_BAUD);
     assert(c->measurement_ms==200 && c->nav_rate==1 && c->time_ref==1 && rate_polls);
-    assert(message_rates[0]==1 && message_rates[4]==1);
-    assert(!message_rates[1] && !message_rates[2] && !message_rates[3] && !message_rates[5]);
+    for (unsigned i=0;i<6;++i) assert(!message_rates[0][i]);
+    assert(message_rates[1][2]==1 && message_rates[1][0x12]==1 && message_rates[1][6]==1 && message_rates[1][0x21]==5);
+    assert(!strcmp(GPS_SoftwareVersion(),"7.03 TEST") && !strcmp(GPS_HardwareVersion(),"00040007"));
 }
 int main(void)
 {
@@ -172,6 +179,8 @@ int main(void)
     assert(GPS_GetConfig()->error==GPS_CFG_VERIFY && !port_sets);
     reset(GPS_BOOT_BAUD,0); ignore_message=1; until(GPS_CONFIG_ERROR,3000);
     assert(GPS_GetConfig()->error==GPS_CFG_VERIFY && !rate_polls);
+    reset(GPS_BOOT_BAUD,0); drop_ack=1; until(GPS_CONFIG_ERROR,3000);
+    assert(GPS_GetConfig()->error==GPS_CFG_VERIFY); drop_ack=0; until(GPS_CONFIG_READY,4000); check_ready();
     reset(GPS_BOOT_BAUD,0); ignore_rate=1; until(GPS_CONFIG_ERROR,3000);
     assert(GPS_GetConfig()->error==GPS_CFG_VERIFY && GPS_GetConfig()->measurement_ms==1000);
     reset(GPS_BOOT_BAUD,0); corrupt_reply=1; until(GPS_CONFIG_READY,4000); check_ready();
@@ -188,6 +197,6 @@ int main(void)
     reply(1,0x99,(const uint8_t*)fake,strlen(fake)); GPS_Process(tick);
     assert(GPS_GetData()->altitude_mm==old_altitude);
     sentence("GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,123.4,M,46.9,M,,");
-    GPS_Process(tick); assert(GPS_GetData()->altitude_mm==123400);
+    GPS_Process(tick); assert(GPS_GetData()->altitude_mm==old_altitude);
     puts("PASS GPS config: UBX checksums/readback, 5Hz/38400, message rates, MCU/receiver restarts, missing RX, NAK, verification, UART faults and wrap");
 }

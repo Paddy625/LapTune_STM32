@@ -3,6 +3,7 @@
 
 #include "stm32f1xx_hal.h"
 #include "gps_nmea.h"
+#include "gps_epoch.h"
 
 #define GPS_BOOT_BAUD 9600U
 #define GPS_RUN_BAUD 38400U
@@ -20,10 +21,12 @@ typedef struct {
 HAL_StatusTypeDef GPS_Init(UART_HandleTypeDef *uart);
 void GPS_OnRxComplete(UART_HandleTypeDef *uart);
 void GPS_OnError(UART_HandleTypeDef *uart);
-/* Main loop only: drain IRQ queue, parse NMEA and expire stale fields. */
+/* Main loop only: drain IRQ queue, assemble UBX epochs and expire stale fields. */
 void GPS_Process(uint32_t now);
 const GPS_Data *GPS_GetData(void);
-/* READY means UART, NMEA message rates and CFG-RATE were read back successfully. */
+/* READY means UART, UBX/NMEA message rates and CFG-RATE were read back successfully. */
 const GPS_ConfigStatus *GPS_GetConfig(void);
+const char *GPS_SoftwareVersion(void);
+const char *GPS_HardwareVersion(void);
 
 #endif

@@ -7,6 +7,8 @@ typedef struct { unsigned unused; } GPIO_TypeDef;
 extern GPIO_TypeDef gpio_a, gpio_b;
 #define GPIOA (&gpio_a)
 #define GPIOB (&gpio_b)
+#define GPIO_PIN_1 (1U << 1)
+#define GPIO_PIN_4 (1U << 4)
 #define GPIO_PIN_0 (1U << 0)
 #define SPI_BAUDRATEPRESCALER_8 16U
 #define SPI_BAUDRATEPRESCALER_32 32U
@@ -20,6 +22,9 @@ typedef enum { HAL_OK, HAL_ERROR, HAL_BUSY, HAL_TIMEOUT } HAL_StatusTypeDef;
 HAL_StatusTypeDef HAL_SPI_Transmit(SPI_HandleTypeDef *, const uint8_t *, uint16_t, uint32_t);
 HAL_StatusTypeDef HAL_SPI_Receive(SPI_HandleTypeDef *, uint8_t *, uint16_t, uint32_t);
 HAL_StatusTypeDef HAL_SPI_TransmitReceive(SPI_HandleTypeDef *, const uint8_t *, uint8_t *, uint16_t, uint32_t);
+HAL_StatusTypeDef HAL_SPI_TransmitReceive_DMA(SPI_HandleTypeDef *, uint8_t *, uint8_t *, uint16_t);
+HAL_StatusTypeDef HAL_SPI_Abort(SPI_HandleTypeDef *);
+GPIO_PinState HAL_GPIO_ReadPin(GPIO_TypeDef *, uint16_t);
 HAL_StatusTypeDef HAL_SPI_Init(SPI_HandleTypeDef *);
 HAL_StatusTypeDef HAL_UART_Receive_IT(UART_HandleTypeDef *, uint8_t *, uint16_t);
 HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef *);

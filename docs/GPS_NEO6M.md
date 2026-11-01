@@ -1,172 +1,67 @@
-# GPS NEO-6M — połączenie i uruchomienie
+# GPS u-blox NEO-6M — P0
 
-![Cały układ z GPS](wiring_st7735s.png)
+Moduł GY-NEO6MV2 komunikuje się przez USART3. Zasilanie podaj według
+specyfikacji konkretnego breakouta; poziomy UART przy STM32 muszą wynosić
+3,3 V. Wspólna masa jest wymagana.
 
-[Schemat SVG](wiring_st7735s.svg). Schemat obejmuje Nucleo, LSM6DS3, ST7735S
-i dodatkowy moduł GY-NEO6MV2 ze zdjęcia.
-Opis 9600 baud na rysunku dotyczy startu; firmware następnie ustawia 38400 baud.
+| GPS | Nucleo-F103RB |
+| --- | --- |
+| TX | PB11 / CN10/18 / USART3_RX |
+| RX | PB10 / D6 / CN9/7 / USART3_TX |
+| GND | GND |
+| VCC | 3V3, jeżeli moduł dopuszcza zasilanie 3,3 V |
+| PPS | Niepodłączony w P0; planowany osobno w P1 |
 
-## Połączenia
+## Konfiguracja odbiornika
 
-| Pin płytki GPS | NUCLEO-F103RB | Uwagi |
+Start UART: 9600 bit/s, 8N1. Automat sprawdza 9600/38400 i ustawia
+**38400 bit/s**, oba kierunki UBX. PB10 → GPS RX jest potrzebne do konfiguracji.
+Po restarcie odbiornika lub MCU rozpoznanie jest ponawiane. Nie zapisujemy
+konfiguracji trwale w pamięci GPS. Wymagamy ACK dla CFG-MSG/CFG-RATE, sprawdzamy NAK i odczyt ustawień.
+
+P0 odczytuje MON-VER oraz ustawia i sprawdza CFG-MSG/CFG-RATE:
+
+| Komunikat | Częstość | Zastosowanie |
 | --- | --- | --- |
-| VCC | 5V, CN6/5 | Tylko wejście VCC płytki GY-NEO6MV2 z regulatorem dopuszczającym 5 V — patrz poniżej |
-| RX | PB10 / USART3_TX, CN10/25, także D6 | **Wymagane** do konfiguracji 5 Hz i UART |
-| TX | PB11 / USART3_RX, CN10/18 | Wymagane; tędy odbieramy NMEA |
-| GND | GND Nucleo | Wspólna masa z TFT i LSM6DS3 |
+| NAV-POSLLH | 5 Hz | lon/lat, wysokość MSL |
+| NAV-VELNED | 5 Hz | poziome gSpeed |
+| NAV-SOL | 5 Hz | rodzaj fixa, gpsFixOK, weekSet, TOWSet, satelity |
+| NAV-TIMEUTC | 1 Hz | pomocnicze data/czas UTC |
+| GGA/GLL/GSA/GSV/RMC/VTG | wyłączone | unikanie duplikatów i mieszanego cache NMEA |
 
-Łączymy **TX GPS → PB11 (RX STM32)** oraz **PB10 (TX STM32) → RX GPS**.
-Oba przewody są teraz wymagane do potwierdzenia konfiguracji 5 Hz.
-Piny UART pracują w logice **3,3 V**.
-VCC płytki i poziom sygnałów UART to różne rzeczy. Nie podawaj 5 V na RX/TX.
-USART3 nie koliduje z istniejącym SPI1/SPI2 ani z USART2 połączonym z ST-Link.
+CFG-RATE: measRate=200 ms, navRate=1, timeRef=GPS. Strumień nominalny:
+(36+44+60) × 5 + 28 = **728 B/s**, czyli 7280 bit/s w 8N1,
+około 19% UART 38400. Pozostaje zapas na odpowiedzi konfiguracyjne.
+Dodatkowe komunikaty wcześniej włączone innym narzędziem nie są globalnie
+wyłączane; nadmiar ujawni się jako przepełnienie bufora.
 
-Na zdjęciu jest płytka nośna GY-NEO6MV2 z elementami zasilania. Schemat zakłada
-jej wersję z regulatorem i wejściem VCC dopuszczającym 5 V. Przed podłączeniem
-5 V sprawdź oznaczenie regulatora/specyfikację swojej płytki, ponieważ występują
-różne wersje i kopie. **Sam moduł u-blox NEO-6M wymaga 2,7–3,6 V**, więc 5 V
-nie wolno podawać bezpośrednio na jego zasilanie. Jeśli Twoja płytka nie ma
-regulatora, użyj 3V3 zgodnie z jej dokumentacją. Zasilenie wejścia regulatora
-z 3V3 może z kolei dać za niskie napięcie za regulatorem i powodować restarty.
+Bufor UART: 1024 bajty, przerwanie odbioru jednego bajtu. Koniec ramki dostaje
+64-bitowy czas w ISR; checksum i interpretacja są wykonywane poza ISR.
+Sterownik SD wywołuje obsługę GPS podczas oczekiwania na kartę.
+USART3 nie korzysta tutaj z DMA; IMU ma osobne DMA SPI2.
 
-Podłącz antenę GPS do modułu. Pierwsze uruchomienie wykonaj na zewnątrz,
-z anteną zwróconą w stronę otwartego nieba. W pomieszczeniu może nie być fixa.
-Początkowe ustalanie pozycji może trwać kilka minut.
+## Spójność i jednostki
 
-## Odczyty i ekran
+Trzy komunikaty nawigacyjne są składane według identycznego iTOW. Deadline:
+80 ms od pierwszego fragmentu. Wymagane POSLLH i SOL z poprawnym fixem
+2D/3D i ważnym czasem tygodnia. Pozycja 2D nie daje wysokości; brak VELNED
+nie daje prędkości. Brakujące pola są puste. Późny fragment nie poprawia
+opublikowanej epoki. Brak świeżej poprawnej pozycji przez **800 ms**
+unieważnia cache. Błędy checksum, UART, bufora, niepełne epoki i brak fixa
+mają oddzielne liczniki. Brak komunikatów przez 3 s oznacza `GPS NO DATA`.
 
-UART: **38400 baud, 8N1**, bez kontroli przepływu, po automatycznej konfiguracji.
-`MX_USART3_UART_Init()` i `.ioc` celowo zachowują **startowe 9600 baud**,
-żeby porozumieć się z fabrycznym NEO-6M. Sterownik sprawdza 9600 i 38400 baud,
-odczytuje `UBX-CFG-PRT`, ustawia port UART1 odbiornika na 38400 i przełącza
-USART3 STM32. Po restarcie samego Nucleo rozpoznaje także GPS pozostawiony
-na 38400 baud. Inna prędkość lub wyłączony odbiór UBX wymaga przywrócenia
-ustawień odbiornika.
+- lon/lat: oryginalne signed int32 × 1e-7 stopnia; zapis 7 miejsc.
+- MSL: `hMSL × 0,001 m`; nie jest to wysokość elipsoidalna `height`.
+- Prędkość: `gSpeed × 0,036 km/h`, z cm/s, bez różnicowania pozycji.
+- Data/czas: UTC, uwzględnione ważności i znak nano; brak stałej poprawki GPS–UTC.
 
-Następnie ustawia RMC i GGA na każdą nową pozycję, wyłącza domyślne
-GLL/GSA/GSV/VTG i wysyła `UBX-CFG-RATE`: **200 ms, navRate=1, timeRef=1**.
-Oznacza to 5 rozwiązań nawigacyjnych na sekundę. Data i czas NMEA nadal są UTC.
-Wszystkie ustawienia są odpytywane i porównywane z żądanymi wartościami;
-sam ACK nie oznacza jeszcze zakończenia konfiguracji. Nie zapisujemy ustawień
-do flash/EEPROM GPS — są stosowane po uruchomieniu firmware.
+Widok TFT zachowuje układ i sposób odświeżania co 200 ms. Dane pochodzą teraz
+z jednej epoki UBX. S oznacza satelity z NAV-SOL, ALT oznacza MSL.
+`GPS NO FIX` to strumień bez poprawnego rozwiązania; `GPS NO DATA` to brak
+świeżej komunikacji. Diagnostyka konfiguracji nadal jest pokazywana na TFT.
 
-Brak odpowiedzi, NAK, niezgodny odczyt lub błąd UART daje `GPS CFG ERROR`;
-po 2 s kod ponawia konfigurację. Nie zatrzymuje to IMU ani loggera SD.
-Odebrane poprawne dane nawigacyjne mogą nadal trafiać do logu, ale bez
-potwierdzonej konfiguracji nie ma gwarancji ich częstotliwości 5 Hz.
-Niepowodzenia mają ograniczone czasy oczekiwania; nie ma pętli blokującej
-do chwili uzyskania fixa. Polecenia wysyła główna pętla, poza przerwaniem.
-
-Pozostaje nagłówek, Twój kompaktowy układ ACC i stopka. Pomiędzy nimi,
-w sześciu liniach y=72..119, pojawiają się np.:
-
-```text
-GPS FIX 5HZ S:08
-LAT +52.2297000
-LON +021.0122000
-ALT +123.4 M
-UTC 12:34:56
-DATE 2026-10-20
-```
-
-- LAT/LON to stopnie dziesiętne, dodatnie dla N/E i ujemne dla S/W.
-  Siedem miejsc po przecinku opisuje format liczby, nie dokładność odbiornika.
-- ALT to wysokość **nad średnim poziomem morza (MSL)** z pola wysokości GGA,
-  w metrach. Nie jest to wysokość nad elipsoidą WGS84 ani nad lokalnym gruntem.
-  Do stabilnego pomiaru wysokości potrzebny jest dobry odbiór i rozwiązanie 3D;
-  wysokość GPS zazwyczaj ma większy błąd niż pozycja pozioma.
-- UTC to czas satelitarny przeliczony przez odbiornik na UTC. Data i godzina
-  nie są przestawiane automatycznie na czas polski. Dla Polski czas lokalny
-  jest UTC+1 zimą, UTC+2 latem; obsługa strefy i zmiany czasu nie jest dodana.
-- S to liczba satelitów użytych w rozwiązaniu według GGA.
-- `GPS SETUP` oznacza trwające ustawianie odbiornika. `GPS CFG ERROR` wymaga
-  sprawdzenia zwłaszcza połączenia **PB10 → RX GPS** i zgodności modułu.
-  `5HZ` jest pokazywane dopiero po poprawnym odczycie konfiguracji z GPS.
-- `GPS NO FIX` oznacza poprawne komunikaty RMC/GGA bez ważnej pozycji.
-  `GPS NO DATA` oznacza brak świeżych, poprawnych RMC/GGA — sprawdź zasilanie,
-  masę, TX→PB11, prędkość i ustawienia wyjściowe modułu.
-- Nieprawidłowe albo przeterminowane pola mają kreski. Data i czas są
-  uznawane za ważne dopiero po poprawnym RMC ze statusem A.
-
-## Prędkość i zapis na SD
-
-NEO-6M podaje **prędkość poziomą względem ziemi** (speed over ground, SOG)
-w komunikacie RMC, w polu po długości geograficznej i E/W. Nie trzeba liczyć
-jej z różnic położenia: jest wyznaczana przez odbiornik GPS. W NMEA jednostką
-są węzły, a kod przelicza je według **1 kn = 1,852 km/h**. Przykład:
-`22.4` kn daje `41.485` km/h po zaokrągleniu do 3 miejsc.
-
-`GPS_Data.speed_millikmh` przechowuje tysięczne km/h jako liczbę całkowitą,
-np. `41485`; `speed_valid` i `speed_ms` określają ważność i czas odebrania.
-Puste pole prędkości oznacza brak wartości. RMC ze statusem V, GGA bez fixa
-oraz 3 s bez świeżej prędkości unieważniają ją; ważne zero pozostaje zerem.
-
-Logger SD dopisuje `GPS_LAT`, `GPS_LON`, `GPS_SPEED_KMH` i `GPS_ALT_MSL_M`
-do każdego wiersza IMU, z migawką nawigacji przy odczycie z FIFO.
-Wysokość MSL pochodzi z GGA i jest zapisywana w metrach z 3 miejscami,
-np. `123.456` albo `-12.345`. RMC nie odświeża wysokości; po 3 s bez świeżej
-wartości pole jest puste. Przy aktualizacji GPS **5 Hz** wartości będą
-powtarzane w wielu wierszach IMU 104 Hz. Puste pola
-oznaczają brak ważnych, świeżych danych. Szczegóły: [format pliku SD](SD_LOGGING.md).
-Prędkość trafia do pliku i struktury danych; układ ekranu GPS pozostaje taki jak wyżej.
-
-## Jak działa kod
-
-- `gps.c`: odbiór jednego bajtu przez `HAL_UART_Receive_IT`, kolejka 512 B.
-  Przerwanie USART3 tylko zapisuje bajt i ponawia odbiór. Parsowanie odbywa
-  się w głównej pętli, poza przerwaniem. Obsłużono przepełnienie kolejki,
-  zbyt długą linię, ponowną synchronizację na `$` oraz ponawianie odbioru
-  po błędzie UART. W tym samym strumieniu rozpoznaje ramki UBX z kontrolą
-  sum CK_A/CK_B; ich dane binarne nie są traktowane jak zdania NMEA.
-  Automat konfiguracji ustawia UART, RMC/GGA i 5 Hz oraz sprawdza odczyt
-  `CFG-PRT`, `CFG-MSG` i `CFG-RATE`. Brak danych po restarcie odbiornika
-  uruchamia ponowne rozpoznanie prędkości i konfigurację.
-- `gps_nmea.c`: kontrola XOR `*HH`, rozpoznawanie GP/GN RMC oraz GGA,
-  walidacja współrzędnych, jednostek i daty. Nie używa `sscanf` z floatami,
-  pamięci dynamicznej ani funkcji blokujących odbiór.
-- `GPS_Data`: współrzędne jako stopnie × 10⁷, wysokość w mm, prędkość
-  jako km/h × 1000 oraz pola
-  kalendarza. Struktura jest dostępna przez `GPS_GetData()` po `GPS_Process()`.
-- RMC dostarcza datę/czas, pozycję i prędkość; GGA dostarcza pozycję, wysokość MSL,
-  jakość fixa i liczbę satelitów. Pola mają osobne znaczniki świeżości.
-  Po **3 s** bez nowej wartości odpowiednia flaga ważności jest zerowana.
-  RMC ze statusem V i GGA z jakością 0 unieważniają odpowiednie pomiary.
-- `gps_display.c`: migawka odczytów co **200 ms** i jedno małe pole na wywołanie.
-  Wszystkie linie są dopełniane spacjami, żeby po zmianie wartości nie zostawały
-  stare cyfry. Blokujące transmisje SPI nie zatrzymują przerwań odbioru GPS.
-- `.ioc`, MSP, IRQ i callbacki HAL obejmują USART3 na PB10/PB11.
-
-## Sprawdzenie
-
-W STM32CubeIDE zbuduj i wgraj projekt. Po podłączeniu GPS powinien pojawić się
-`GPS SETUP`, następnie `GPS NO FIX 5HZ` i po ustaleniu pozycji `GPS FIX 5HZ`,
-współrzędne, wysokość i data/czas. Skontroluj także próbki w nowym pliku SD:
-nowe dane GPS powinny pojawiać się co około 200 ms, a nie co sekundę.
-Na postoju wartości mogą się powtarzać; częstotliwość odbioru można sprawdzić
-w debuggerze po zmianach `GPS_GetData()->position_ms` i `altitude_ms`.
-Odłączenie GPS po około 3 s unieważnia dane i uruchamia rozpoznanie portu;
-ponowne podłączenie powinno przywrócić konfigurację bez resetowania Nucleo.
-
-W debuggerze `GPS_GetConfig()` udostępnia stan, przyczynę błędu, prędkość
-UART, ostatnie polecenie i liczbę prób oraz odczytane `measurement_ms`,
-`nav_rate`, `time_ref`. `GPS_CONFIG_READY` potwierdza zgodne odpowiedzi GPS,
-nie dokładność pozycji ani synchronizację czasu przez PPS.
-
-W chmurze:
-
-```sh
-bash tests/run.sh
-python3 /workspace/.laptune-setup/build.py Debug
-python3 /workspace/.laptune-setup/build.py Release
-```
-
-Testy GPS obejmują przykładowe pakiety NMEA, błędne sumy, puste pola,
-brak fixa, S/W, ujemną wysokość, poprawność dat, zerowe współrzędne,
-prędkość RMC i konwersję na km/h, brak/zero/błędne pole prędkości,
-przepełnienie licznika czasu, ramki dzielone między odczytami, przepełnienie
-kolejki, błędy UART i układ ekranu. Model odbiornika sprawdza także konfigurację
-5 Hz/38400, odczyt zwrotny, NAK i ACK bez zmiany ustawień, brak RX modułu,
-start GPS na obu prędkościach, restart samego Nucleo i odbiornika, ponawianie,
-sumy UBX, mieszanie UBX/NMEA i błędy inicjalizacji/transmisji UART.
-To testy programowe z atrapą HAL;
-nie potwierdzają odbioru satelitów, zasilania, anteny ani dokładności pomiaru.
+`T_IMU_US`, GPS_STATE, GPS_FIX_ID, GPS_ITOW_MS oraz ograniczenie czasów odbioru
+opisano w [P0_LOGGER.md](P0_LOGGER.md). Nie ma jeszcze synchronizacji PPS
+ani skorygowania latencji GNSS. Model dynamiki, oszczędzanie energii i static
+hold nie są w P0 zmieniane ani uznawane za zweryfikowane. Są do osobnej
+weryfikacji na konkretnym firmware NEO-6 podczas kolejnego etapu.

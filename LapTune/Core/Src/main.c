@@ -23,6 +23,9 @@
 /* USER CODE BEGIN Includes */
 
 #include "acc.h"
+#include "boot_identity.h"
+#include "timebase.h"
+#include "imu_stream.h"
 #include "acc_display.h"
 #include "gps.h"
 #include "gps_display.h"
@@ -59,7 +62,7 @@ UART_HandleTypeDef huart3;
 
 float ax, max_x=0, min_x=0, ay, max_y=0, min_y=0, az, max_z=0, min_z=0;
 float gx, min_gx=0, max_gx=0, gy, min_gy=0, max_gy=0, gz, min_gz=0, max_gz=0;
-static uint8_t sensor_ok, have_sample;
+static uint8_t sensor_ok, have_sample, sample_valid;
 static uint32_t last_sensor_retry, last_sensor_data;
 static uint8_t app_ready;
 
@@ -81,24 +84,18 @@ static void MX_SPI2_Init(void);
 static void ServiceAcquisition(void)
 {
   if (!app_ready) return;
-  GPS_Process(HAL_GetTick());
+  GPS_Process((uint32_t)(Timebase_NowUs()/1000U));
   LogClock_Update(GPS_GetData());
-  if (!sensor_ok) return;
-  for (unsigned n=0; n<32; ++n) {
-    LSM6DS3_Sample sample;
-    uint16_t pending=0;
-    LSM6DS3_ReadResult result=LSM6DS3_ReadFIFO(&sample,&pending);
-    if (result==LSM6DS3_READ_NOT_READY) {
-      if ((uint32_t)(HAL_GetTick()-last_sensor_data)>=1000U) {
-        sensor_ok=0; SDLogger_DataLoss();
-      }
-      break;
-    }
-    if (result!=LSM6DS3_READ_OK) {
-      sensor_ok=0; SDLogger_DataLoss(); break;
-    }
+  ImuStream_Service();
+  for (unsigned n=0; n<32 && SDLogger_CanAccept(); ++n) {
+    ImuRecord record;
+    if (!ImuStream_Pop(&record)) break;
     last_sensor_data=HAL_GetTick();
-    uint32_t sample_ms=HAL_GetTick()-(uint32_t)(pending-1U)*1000U/104U;
+    SDLogger_AppendRaw(&record,LogClock_At((uint32_t)(record.t_us/1000U)));
+    sample_valid=record.flags==0;
+    if (!sample_valid) continue;
+    LSM6DS3_Sample sample;
+    ImuStream_Scale(&record,&sample);
     ax=sample.ax; ay=sample.ay; az=sample.az;
     gx=sample.gx; gy=sample.gy; gz=sample.gz;
     if (!have_sample) {
@@ -118,11 +115,18 @@ static void ServiceAcquisition(void)
     if (gy<min_gy) min_gy=gy;
     if (gz>max_gz) max_gz=gz;
     if (gz<min_gz) min_gz=gz;
-    SDLogger_Append(&sample,LogClock_At(sample_ms),GPS_GetData());
+
   }
 }
 
-void SD_SPI_Service(void) { ServiceAcquisition(); }
+/* Storage may call this while a FatFs write is in progress. IMU acquisition
+   continues in EXTI/DMA; only drain GPS here, never re-enter the SD queue. */
+void SD_SPI_Service(void)
+{
+  if (!app_ready) return;
+  GPS_Process((uint32_t)(Timebase_NowUs()/1000U));
+  LogClock_Update(GPS_GetData());
+}
 
 static HAL_StatusTypeDef ShowLogState(void)
 {
@@ -162,6 +166,9 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
+  /* Flash journal is updated before the acquisition clock/interrupts start. */
+  if (!BootIdentity_Init()) Error_Handler();
+  Timebase_Init();
 
   /* USER CODE END SysInit */
 
@@ -178,8 +185,8 @@ int main(void)
   }
   if (GPS_Init(&huart3) != HAL_OK) Error_Handler();
   sensor_ok = LSM6DS3_Init();
-  HAL_Delay(100U); /* Let gyro/accelerometer settle before enabling FIFO. */
-  if (sensor_ok) sensor_ok=LSM6DS3_EnableFIFO();
+  HAL_Delay(100U); /* Let gyro/accelerometer settle before arming DRDY. */
+  if (sensor_ok) sensor_ok=ImuStream_Start();
   last_sensor_retry=last_sensor_data=HAL_GetTick();
   app_ready=1;
   SD_SPI_Bind(&hspi1);
@@ -194,12 +201,16 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    uint32_t now=HAL_GetTick();
     ServiceAcquisition();
+    uint32_t now=HAL_GetTick();
+    if (sensor_ok && (uint32_t)(now-last_sensor_data)>=1000U) {
+      ImuStream_Stop(); sensor_ok=0;
+    }
     if (!sensor_ok && (uint32_t)(now-last_sensor_retry)>=1000U) {
+      ImuStream_Stop();
       sensor_ok=LSM6DS3_Init();
       HAL_Delay(100U);
-      if (sensor_ok) sensor_ok=LSM6DS3_EnableFIFO();
+      if (sensor_ok) sensor_ok=ImuStream_Start();
       last_sensor_retry=last_sensor_data=HAL_GetTick();
     }
     SDLogger_Process(HAL_GetTick());
@@ -212,7 +223,7 @@ int main(void)
       .gyro_max = {max_gx, max_gy, max_gz}
     };
     if (AccDisplay_Update(HAL_GetTick(), &readings,
-                          sensor_ok && have_sample) != HAL_OK) {
+                          sensor_ok && have_sample && sample_valid) != HAL_OK) {
       Error_Handler();
     }
     if (GPSDisplay_Update(HAL_GetTick(), GPS_GetData(), GPS_GetConfig()) != HAL_OK) {
@@ -417,10 +428,16 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 0, 0);
+  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 3, 0);
   HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
+  GPIO_InitStruct.Pin=GPIO_PIN_1|GPIO_PIN_4;
+  GPIO_InitStruct.Mode=GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull=GPIO_PULLDOWN;
+  HAL_GPIO_Init(GPIOA,&GPIO_InitStruct);
+  HAL_NVIC_SetPriority(EXTI1_IRQn,1,0); HAL_NVIC_EnableIRQ(EXTI1_IRQn);
+  HAL_NVIC_SetPriority(EXTI4_IRQn,1,0); HAL_NVIC_EnableIRQ(EXTI4_IRQn);
 
   /* USER CODE END MX_GPIO_Init_2 */
 }
@@ -429,8 +446,15 @@ static void MX_GPIO_Init(void)
 void HAL_GPIO_EXTI_Callback(uint16_t pin)
 {
   /* Debounced B1 release requests foreground stop/resume; no FatFs in IRQ. */
-  if (pin==B1_Pin) SDLogger_Button();
+  if (pin==GPIO_PIN_1) ImuStream_OnDrdy(0);
+  else if (pin==GPIO_PIN_4) ImuStream_OnDrdy(1);
+  else if (pin==B1_Pin) SDLogger_Button();
 }
+
+void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *spi)
+{ if (spi==&hspi2) ImuStream_OnComplete(); }
+void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *spi)
+{ if (spi==&hspi2) ImuStream_OnError(); }
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *uart)
 {

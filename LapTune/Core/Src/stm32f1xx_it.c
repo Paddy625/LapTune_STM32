@@ -22,6 +22,7 @@
 #include "stm32f1xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "timebase.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -58,6 +59,7 @@
 
 /* USER CODE BEGIN EV */
 extern UART_HandleTypeDef huart3;
+extern SPI_HandleTypeDef hspi2;
 
 /* USER CODE END EV */
 
@@ -214,6 +216,13 @@ void EXTI15_10_IRQHandler(void)
 }
 
 /* USER CODE BEGIN 1 */
+extern DMA_HandleTypeDef hdma_spi2_rx,hdma_spi2_tx;
+void SPI2_IRQHandler(void) { HAL_SPI_IRQHandler(&hspi2); }
+void TIM2_IRQHandler(void) { Timebase_OnOverflow(); }
+void EXTI1_IRQHandler(void) { HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_1); }
+void EXTI4_IRQHandler(void) { HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_4); }
+void DMA1_Channel4_IRQHandler(void) { HAL_DMA_IRQHandler(&hdma_spi2_rx); }
+void DMA1_Channel5_IRQHandler(void) { HAL_DMA_IRQHandler(&hdma_spi2_tx); }
 void USART3_IRQHandler(void)
 {
   HAL_UART_IRQHandler(&huart3);
