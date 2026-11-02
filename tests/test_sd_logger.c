@@ -13,8 +13,10 @@ static unsigned char *image;
 static uint32_t tick;
 static int no_card,write_error;
 static uint64_t mono;
+#ifndef LAPTUNE_PIPELINE_TEST
 volatile ImuDiagnostics imu_diag;
 uint8_t lsm6ds3_registers[16],lsm6ds3_config_verified;
+#endif
 static GPS_Data gps_data;
 static GPS_ConfigStatus config={.state=GPS_CONFIG_READY,.baud=38400,.measurement_ms=200,.nav_rate=1,.time_ref=1};
 const GPS_ConfigStatus *GPS_GetConfig(void) { return &config; }
@@ -25,7 +27,7 @@ uint64_t Timebase_NowUs(void) { return mono; }
 static void advance(uint32_t ms) { tick+=ms; mono+=(uint64_t)ms*1000; }
 static unsigned sync_calls,init_calls;
 static DSTATUS medium_status=STA_NOINIT;
-static void (*on_sync)(void),(*on_init)(void);
+static void (*on_sync)(void),(*on_init)(void),(*on_write)(void);
 volatile SD_SPI_Diagnostics sd_spi_diag;
 /* The footer test injects a CMD0 failure; card protocol is tested separately. */
 const char *SD_SPI_ErrorName(void) { assert(sd_spi_diag.error==SD_SPI_CMD0); return "CMD0"; }
@@ -47,6 +49,7 @@ DRESULT disk_write(BYTE p,const BYTE *in,LBA_t at,UINT n)
 {
     assert(!p && at<SECTORS && n<=SECTORS-at);
     if (write_error || no_card) { medium_status=STA_NOINIT; return RES_ERROR; }
+    if (on_write) { void (*action)(void)=on_write; on_write=NULL; action(); }
     memcpy(image+at*512,in,n*512);
     advance(n); /* Emulate media latency, keeping interrupts/time independent. */
     return RES_OK;
@@ -68,7 +71,7 @@ DRESULT disk_ioctl(BYTE p,BYTE cmd,void *out)
 }
 static void fresh_card(uint32_t start)
 {
-    no_card=write_error=0; sync_calls=0; on_sync=on_init=NULL; tick=start;
+    no_card=write_error=0; sync_calls=0; on_sync=on_init=on_write=NULL; tick=start;
     mono=(uint64_t)start*1000;
     GPS_Epoch_Init(); memset(&gps_data,0,sizeof(gps_data)); memset((void*)&imu_diag,0,sizeof(imu_diag));
     sd_spi_diag=(SD_SPI_Diagnostics){0};
@@ -90,7 +93,7 @@ static char *read_log(const char *name,unsigned rows)
     for (char *p=text;*p;) {
         char *end=strstr(p,"\r\n"); assert(end); unsigned columns=1;
         for (char *q=p;q<end;++q) if (*q==';') ++columns;
-        assert(columns==33); ++lines; p=end+2;
+        assert(columns==36); ++lines; p=end+2;
     }
     assert(lines==rows+1); return text;
 }
@@ -98,7 +101,9 @@ static ImuRecord record(uint32_t nr,uint64_t t)
 {
     return (ImuRecord){.nr=nr,.t_us=t,.acc_minus_gyro_us=-75,.raw={2048,-2048,1,1000,-1000,1}};
 }
-static void append(uint32_t nr) { ImuRecord r=record(nr,mono); SDLogger_AppendRaw(&r,(LogTime){0}); }
+static uint8_t append_raw(const ImuRecord *r,LogTime t)
+{ if (r->nr>imu_diag.acquired) imu_diag.acquired=r->nr; return SDLogger_AppendRaw(r,t); }
+static void append(uint32_t nr) { ImuRecord r=record(nr,mono); append_raw(&r,(LogTime){0}); }
 static void stop(void)
 {
     SDLogger_RequestStop();
@@ -118,21 +123,21 @@ static void test_contract(void)
     append(1); SDLogger_Process(tick);
     uint64_t t=7200000001ULL; nav(1000,t,7,3);
     LogTime utc={.year=2026,.month=11,.day=1,.hour=12,.minute=13,.second=14,.millisecond=123,.valid=1};
-    ImuRecord r=record(3,t); SDLogger_AppendRaw(&r,utc);
-    r=record(4,t+9615); SDLogger_AppendRaw(&r,utc);
-    nav(1200,t+200000,7,3); r=record(5,t+200000); SDLogger_AppendRaw(&r,utc);
+    ImuRecord r=record(3,t); append_raw(&r,utc);
+    r=record(4,t+9615); append_raw(&r,utc);
+    nav(1200,t+200000,7,3); r=record(5,t+200000); append_raw(&r,utc);
     nav(1400,t+400000,5,2); GPS_Epoch_Service(&gps_data,t+480000);
-    r=record(6,t+480000); SDLogger_AppendRaw(&r,utc);
-    r=record(7,t+1280000); r.flags=IMU_ERR_SPI; SDLogger_AppendRaw(&r,(LogTime){0}); stop();
+    r=record(6,t+480000); append_raw(&r,utc);
+    r=record(7,t+1280000); r.flags=IMU_ERR_SPI; append_raw(&r,(LogTime){0}); stop();
     assert(sd_log_written==6 && !sd_log_dropped && sd_max_pause_us);
     char *text=read_log("LOG0001.TXT",6);
     assert(strstr(text,"3;2026-11-01;12:13:14.123;0.999424;-0.999424;0.000488;70.000000;-70.000000;0.070000;52.1234567;21.5678901;44.424;123.456;7200000001;N;1;1000;1;0;7199999926;7200000001;"));
     assert(strstr(text,"7200009616;R;1;1000;"));
     assert(strstr(text,"7200200001;N;2;1200;"));
     assert(strstr(text,";52.1234567;21.5678901;;;7200480001;N;3;1400;"));
-    assert(strstr(text,"7;;;;;;;;;;;;;7201280001;I;;;0;1;"));
+    assert(strstr(text,"7;;;;;;;;;;;;;7201280001;I;3;1400;0;1;"));
     char *json=read_file("SESSION.json");
-    assert(strstr(json,"\"format_version\": 2") && strstr(json,"test\\\"firmware\\\\7.03"));
+    assert(strstr(json,"\"format_version\": 3") && strstr(json,"test\\\"firmware\\\\7.03"));
     const char *export_dir=getenv("P0_ARTIFACT_DIR");
     if (export_dir) {
         char path[512]; snprintf(path,sizeof(path),"%s/LOG0001.TXT",export_dir);
@@ -142,11 +147,33 @@ static void test_contract(void)
     }
     free(json); free(text);
 }
+static void test_metadata_boundaries(void)
+{
+    fresh_card(0); SDLogger_Start(); append(1); SDLogger_Process(tick);
+    advance(SD_LOG_FILE_DURATION_MS); SDLogger_Process(tick);
+    assert(!strcmp(sd_log_filename,"LOG0002.TXT")); append(2); SDLogger_Process(tick);
+    advance(SD_LOG_SNAPSHOT_INTERVAL_MS); SDLogger_Process(tick);
+    char *json=read_file("SESSION.json");
+    assert(strstr(json,"\"last_written_nr\": 2") && strstr(json,"\"last_synced_nr\": 2") && strstr(json,"\"clean_shutdown\": false"));
+    free(json); append(3); stop(); json=read_file("SESSION.json");
+    assert(strstr(json,"\"last_written_nr\": 3") && strstr(json,"\"last_synced_nr\": 3") && strstr(json,"\"clean_shutdown\": true"));
+    free(json); json=read_file("SESSION.bak");
+    assert(strstr(json,"\"last_written_nr\": 2") && strstr(json,"\"clean_shutdown\": false")); free(json);
+}
+static void test_sync_not_retroactive(void)
+{
+    fresh_card(0); SDLogger_Start(); append(1); SDLogger_Process(tick);
+    assert(sd_log_written==1 && sd_diag.synced_records==0);
+    write_error=1; advance(1001); SDLogger_Process(tick); assert(sd_log_state==LOG_CARD_ERROR);
+    write_error=0; advance(SD_LOG_RETRY_INTERVAL_MS); SDLogger_Process(tick);
+    assert(SDLogger_Ready() && !sd_diag.synced_records && !sd_diag.last_synced_nr);
+    append(2); stop(); assert(sd_log_written==2 && sd_diag.synced_records==1 && sd_diag.last_synced_nr==2);
+}
 static void test_integer_limits(void)
 {
     fresh_card(0); SDLogger_Start();
     ImuRecord r=record(UINT32_MAX,UINT64_MAX); r.acc_minus_gyro_us=75;
-    SDLogger_AppendRaw(&r,(LogTime){0}); stop();
+    append_raw(&r,(LogTime){0}); stop();
     char *text=read_log("LOG0001.TXT",1);
     assert(strstr(text,"4294967295;;;"));
     assert(strstr(text,";18446744073709551615;I;;;1;0;18446744073709551615;18446744073709551540;"));
@@ -190,10 +217,13 @@ static void test_retry_and_card_change(void)
 static void test_overload_and_failures(void)
 {
     fresh_card(0); SDLogger_Start();
-    for (unsigned i=1;i<=17;++i) append(i);
-    assert(sd_log_state==LOG_DATA_LOSS && sd_log_dropped==1); SDLogger_Process(tick); assert(sd_log_dropped==17);
-    advance(SD_LOG_RETRY_INTERVAL_MS); SDLogger_Process(tick); assert(sd_log_state==LOG_RECORDING);
-    append(18); stop(); char *text=read_log("LOG0002.TXT",1); assert(strstr(text,"18;;;")); free(text);
+    for (unsigned i=1;i<=16;++i) append(i);
+    ImuRecord waiting=record(17,mono);
+    assert(!SDLogger_AppendRaw(&waiting,(LogTime){0}));
+    assert(sd_log_state==LOG_RECORDING && !sd_log_dropped);
+    SDLogger_Process(tick); assert(SDLogger_AppendRaw(&waiting,(LogTime){0}));
+    stop(); assert(sd_diag.queue_high_water==16 && !sd_log_dropped);
+    char *text=read_log("LOG0001.TXT",17); assert(strstr(text,"17;;;")); free(text);
     SDLogger_RequestResume(); SDLogger_Process(tick); on_sync=SDLogger_RequestStop;
     advance(SD_LOG_FILE_DURATION_MS); SDLogger_Process(tick); assert(sd_log_state==LOG_STOPPED);
     SDLogger_RequestResume(); SDLogger_Process(tick); no_card=1; advance(SD_LOG_FILE_DURATION_MS); SDLogger_Process(tick);
@@ -223,7 +253,8 @@ static void test_full_and_30_minutes(void)
 int main(void)
 {
     image=malloc(SECTORS*512U); assert(image);
-    test_contract(); test_integer_limits(); test_rotation_and_pause(); test_retry_and_card_change(); test_overload_and_failures(); test_full_and_30_minutes();
+    test_contract(); test_metadata_boundaries(); test_sync_not_retroactive(); test_integer_limits(); test_rotation_and_pause(); test_retry_and_card_change(); test_overload_and_failures(); test_full_and_30_minutes();
     assert(f_mount(NULL,"",0)==FR_OK); free(image);
-    puts("PASS SD/FatFs: 33-column contract, exact uint64/scales, GPS N/R/I, JSON/LFN, session separation, rotation/retry/removal/full/overload, 30 virtual minutes");
+    puts("PASS SD/FatFs: 36-column contract, exact uint64/scales, GPS N/R/I, JSON/LFN, session separation, rotation/retry/removal/full/overload, 30 virtual minutes");
+    return 0;
 }

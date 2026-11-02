@@ -5,7 +5,7 @@
 typedef struct {
     uint64_t first_us,last_us;
     GPS_Fix fix;
-    uint8_t parts,fix_type,flags,satellites;
+    uint8_t seen,parts,fix_type,flags,satellites;
 } Slot;
 static Slot slots[4];
 static GPS_Fix history[HISTORY];
@@ -24,7 +24,11 @@ static void remember(GPS_Fix fix)
 static void invalidate(GPS_Data *d,uint64_t now)
 {
     if (d->position_valid || !history_count || history[(history_head+HISTORY-1)%HISTORY].position_valid)
-        remember((GPS_Fix){.published_us=now});
+    {
+        GPS_Fix f=history_count ? history[(history_head+HISTORY-1)%HISTORY] : (GPS_Fix){0};
+        f.published_us=now; f.position_valid=f.speed_valid=f.altitude_valid=0;
+        remember(f);
+    }
     d->position_valid=d->speed_valid=d->altitude_valid=0;
 }
 void GPS_Epoch_Init(void)
@@ -39,7 +43,7 @@ void GPS_Epoch_ResetStream(GPS_Data *d,uint64_t now)
 }
 static void publish(GPS_Data *d,Slot *s,uint64_t now)
 {
-    if (have_itow && !newer(s->fix.itow_ms,last_itow)) { ++gps_diag.late; s->parts=0; return; }
+    if (have_itow && !newer(s->fix.itow_ms,last_itow)) { ++gps_diag.late; s->seen=s->parts=0; return; }
     if (have_itow) {
         uint32_t dt=(s->fix.itow_ms+WEEK_MS-last_itow)%WEEK_MS;
         if (!gps_diag.min_period_ms || dt<gps_diag.min_period_ms) gps_diag.min_period_ms=dt;
@@ -47,18 +51,18 @@ static void publish(GPS_Data *d,Slot *s,uint64_t now)
         if (dt!=200U) ++gps_diag.bad_period;
     }
     last_itow=s->fix.itow_ms; have_itow=1;
-    s->fix.fix_id=++sequence; s->fix.published_us=now;
+    s->fix.published_us=now; s->fix.rx_us=s->last_us; s->fix.epoch_known=1;
     s->fix.position_valid=(s->parts&5U)==5U && (s->flags&0x0DU)==0x0DU && (s->fix_type==2 || s->fix_type==3);
     s->fix.speed_valid=s->fix.position_valid && (s->parts&2U);
     s->fix.altitude_valid=s->fix.position_valid && s->fix_type==3;
-    if (!s->fix.position_valid) ++gps_diag.invalid_fixes;
+    if (!s->fix.position_valid) ++gps_diag.invalid_fixes; else ++gps_diag.valid_epochs;
     remember(s->fix); ++gps_diag.epoch_count;
     d->position_valid=s->fix.position_valid; d->speed_valid=s->fix.speed_valid; d->altitude_valid=s->fix.altitude_valid;
     d->latitude_e7=s->fix.latitude_e7; d->longitude_e7=s->fix.longitude_e7;
     d->altitude_mm=s->fix.altitude_mm; d->speed_millikmh=s->fix.speed_millikmh;
     d->position_ms=d->speed_ms=d->altitude_ms=(uint32_t)(now/1000U);
     d->satellites=s->satellites; d->fix_quality=d->position_valid ? ((s->flags&2U)?2:1) : 0;
-    s->parts=0;
+    s->seen=s->parts=0;
 }
 static uint8_t days(uint16_t y,uint8_t m)
 {
@@ -90,16 +94,17 @@ void GPS_Epoch_Packet(GPS_Data *d,uint8_t cls,uint8_t id,const uint8_t *p,unsign
     if (have_itow && !newer(itow,last_itow)) { ++gps_diag.late; return; }
     Slot *s=NULL,*empty=NULL,*oldest=&slots[0];
     for (unsigned i=0;i<4;++i) {
-        if (slots[i].parts && slots[i].fix.itow_ms==itow) s=&slots[i];
-        if (!slots[i].parts) empty=&slots[i];
+        if (slots[i].seen && slots[i].fix.itow_ms==itow) s=&slots[i];
+        if (!slots[i].seen) empty=&slots[i];
         if (slots[i].first_us<oldest->first_us) oldest=&slots[i];
     }
     if (!s) {
         s=empty ? empty : oldest;
-        if (s->parts) { ++gps_diag.incomplete; publish(d,s,now); }
-        memset(s,0,sizeof(*s)); s->first_us=now; s->fix.itow_ms=itow;
+        if (s->seen) { ++gps_diag.incomplete; publish(d,s,now); }
+        memset(s,0,sizeof(*s)); s->first_us=now; s->fix.itow_ms=itow; s->fix.fix_id=++sequence; ++gps_diag.received_epochs;
     }
-    if (s->parts&part) { ++gps_diag.late; return; }
+    if (s->seen&part) { ++gps_diag.late; return; }
+    s->seen|=part; s->last_us=now;
     if (part==1) {
         int32_t lon=i32(p+4),lat=i32(p+8);
         if (lat< -900000000 || lat>900000000 || lon< -1800000000 || lon>1800000000) return;
@@ -114,7 +119,7 @@ void GPS_Epoch_Service(GPS_Data *d,uint64_t now)
     /* Oldest pending epoch first; a later fragment cannot revise a published fix. */
     for (unsigned n=0;n<4;++n) {
         Slot *old=NULL;
-        for (unsigned i=0;i<4;++i) if (slots[i].parts && (!old || slots[i].first_us<old->first_us)) old=&slots[i];
+        for (unsigned i=0;i<4;++i) if (slots[i].seen && (!old || slots[i].first_us<old->first_us)) old=&slots[i];
         if (!old || now-old->first_us<GPS_ASSEMBLY_DEADLINE_US) break;
         ++gps_diag.incomplete; publish(d,old,old->first_us+GPS_ASSEMBLY_DEADLINE_US);
     }
@@ -128,7 +133,9 @@ void GPS_Epoch_ForSample(uint64_t sample,GPS_Fix *out)
     for (unsigned i=0;i<history_count;++i) {
         const GPS_Fix *f=&history[(history_head+HISTORY-1U-i)%HISTORY];
         if (f->published_us<=sample) {
-            if (sample-f->published_us<GPS_EPOCH_TIMEOUT_US) *out=*f;
+            *out=*f;
+            if (sample-f->published_us>=GPS_EPOCH_TIMEOUT_US)
+                out->position_valid=out->speed_valid=out->altitude_valid=0;
             return;
         }
     }

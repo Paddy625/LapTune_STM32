@@ -1,9 +1,11 @@
-# P0 — kontrakt loggera 2.0.0-p0
+# P0 — kontrakt loggera 2.0.1-p0
+
+**Aktualizacja i wyniki przeglądu:** [P0_REVIEW_2026-11-02.md](P0_REVIEW_2026-11-02.md).
 
 P0 wprowadza niezależny czas IMU, rzeczywiste zdarzenia DRDY, spójne epoki
 UBX, osobne sesje uruchomień i diagnostykę braków. Zachowuje **104 Hz,
-±16 g, ±2000°/s**, GPS 5 Hz oraz układ TFT. PPS i synchronizacja czasu pomiaru
-GNSS z MCU pozostają etapem P1. Parametry czasowe poniżej są ustawieniami
+±16 g, ±2000°/s**, GPS 5 Hz oraz układ TFT. PPS na PA0 jest przechwytywane sprzętowo jako odniesienie skali czasu.
+Mapowanie czasu pomiaru GNSS na MCU pozostaje etapem P1. Parametry czasowe poniżej są ustawieniami
 oprogramowania; nie są pomiarem dokładności gotowego urządzenia.
 
 ## Wymagane połączenia
@@ -28,12 +30,13 @@ flowchart LR
   SD[microSD: CLK / MOSI / MISO / CS] --- BUS1[PA5 / PA7 / PA6 / PB0]
   TFT[TFT: SCK / SDA / CS] --- TFTBUS[PA5 / PA7 / PB6]
   GPS[GPS: TX / RX] --- UART[PB11 / PB10]
+  PPS[GPS PPS] --> PA0[Nucleo PA0 / A0 / TIM2_CH1]
 ```
 
 Wspólna masa, sygnały 3,3 V. Pozostałe połączenia:
 [IMU](IMU_LSM6DS3.md), [TFT](TFT_ST7735S.md), [GPS](GPS_NEO6M.md),
 [SD](SD_LOGGING.md). TIM2 jest zarezerwowany dla czasu; nie używaj go do
-innego PWM/timera. PA0 pozostaje wolne na późniejszy PPS.
+innego PWM/timera. **PA0 / A0 / CN8 pin 1 jest wejściem PPS (TIM2_CH1)**.
 
 ## Znaczniki i akwizycja
 
@@ -77,10 +80,10 @@ bufor — przeciążenie daje liczniki i brakujące NR.
 ## Format TXT
 
 Pierwsze 13 kolumn zachowuje nazwy, kolejność i jednostki. Nagłówek każdego
-pliku ma **33 pola**, separator `;`, kropkę dziesiętną, CRLF i żadnych komentarzy:
+pliku ma **36 pól**, separator `;`, kropkę dziesiętną, CRLF i żadnych komentarzy:
 
 ```text
-NR;DATA;CZAS;ACC_X;ACC_Y;ACC_Z;GYRO_X;GYRO_Y;GYRO_Z;GPS_LAT;GPS_LON;GPS_SPEED_KMH;GPS_ALT_MSL_M;T_IMU_US;GPS_STATE;GPS_FIX_ID;GPS_ITOW_MS;IMU_VALID;IMU_FLAGS;T_ACC_US;T_GYRO_US;IMU_DROPPED;IMU_SPI_ERRORS;IMU_PAIR_ERRORS;GPS_UART_ERRORS;GPS_CHECKSUM_ERRORS;GPS_INCOMPLETE_EPOCHS;GPS_LATE_EPOCHS;SD_QUEUE_DROPPED;SD_MAX_PAUSE_US;IMU_MISSED_DRDY;GPS_RX_OVERFLOWS;GPS_INVALID_FIXES
+NR;DATA;CZAS;ACC_X;ACC_Y;ACC_Z;GYRO_X;GYRO_Y;GYRO_Z;GPS_LAT;GPS_LON;GPS_SPEED_KMH;GPS_ALT_MSL_M;T_IMU_US;GPS_STATE;GPS_FIX_ID;GPS_ITOW_MS;IMU_VALID;IMU_FLAGS;T_ACC_US;T_GYRO_US;IMU_DROPPED;IMU_SPI_ERRORS;IMU_PAIR_ERRORS;GPS_UART_ERRORS;GPS_CHECKSUM_ERRORS;GPS_INCOMPLETE_EPOCHS;GPS_LATE_EPOCHS;SD_QUEUE_DROPPED;SD_MAX_PAUSE_US;IMU_MISSED_DRDY;GPS_RX_OVERFLOWS;GPS_INVALID_FIXES;GPS_T_RX_US;GPS_T_MEAS_US;TIME_SYNC_STATE
 ```
 
 | Pole | Znaczenie |
@@ -94,8 +97,11 @@ NR;DATA;CZAS;ACC_X;ACC_Y;ACC_Z;GYRO_X;GYRO_Y;GYRO_Z;GPS_LAT;GPS_LON;GPS_SPEED_KM
 | GPS_ALT_MSL_M | hMSL z POSLLH × 0,001 m, 3 miejsca; dla 2D puste |
 | T_IMU_US | uint64, µs, bez konwersji przez float |
 | GPS_STATE | N — nowa ważna epoka, R — powtórzenie, I — brak ważnej pozycji |
-| GPS_FIX_ID | uint32, identyfikator epoki, stały przy R; przy I pusty |
-| GPS_ITOW_MS | oryginalny uint32 iTOW, ms tygodnia GPS; przy I pusty |
+| GPS_FIX_ID | uint32, identyfikator epoki, stały przy R; przy I zachowany, jeśli odebrana epoka jest znana |
+| GPS_ITOW_MS | oryginalny uint32 iTOW, ms tygodnia GPS; przy I zachowany, jeśli odebrana epoka jest znana |
+| GPS_T_RX_US | rzeczywisty czas ostatniego odebranego fragmentu epoki; przy znanej epoce zachowany także dla I |
+| GPS_T_MEAS_US | pusty do czasu zweryfikowanego mapowania GNSS–MCU |
+| TIME_SYNC_STATE | 0 = brak zweryfikowanego mapowania; samo PPS nie ustawia locked |
 | IMU_VALID | 1 tylko przy braku wszystkich błędów wiersza |
 | IMU_FLAGS | maska bitowa opisana poniżej |
 | T_ACC_US, T_GYRO_US | osobne znaczniki zboczy w tej samej skali MCU |
@@ -141,7 +147,8 @@ resetuje ID. Restart łącza GPS unieważnia cache, lecz nie zeruje numeracji.
 Dla próbki IMU wybierana jest ostatnia epoka opublikowana przed jej timestampem,
 z historii 16 epok. Zapobiega to przypisywaniu nowszego GPS do próbek, które
 czekały w RAM na SD. Jeśli historia nie obejmuje próbki, zapis jest I.
-Timeout 800 ms pozostawia pola GPS puste; IMU i zegar działają dalej.
+Timeout 800 ms pozostawia pozycję, prędkość i wysokość puste; znane ID/iTOW/czas RX
+pozostają diagnostycznie. I ma pierwszeństwo nad obecnością tych liczb. IMU i zegar działają dalej.
 N/R wyznaczane są względem ostatniego ID przyjętego przez f_write, również przez granice plików.
 Po błędzie częściowego zapisu importer powinien dodatkowo deduplikować ID;
 FAT nie daje transakcji obejmującej wiersz i awarię zasilania.
@@ -189,11 +196,14 @@ python3 tools/build_firmware.py Release
 ```
 
 W PATH musi być ARM GCC; alternatywnie ustaw ARM_GCC_PREFIX na pełny prefiks
-`/ścieżka/arm-none-eabi-`. Skrypt osadza git SHA oraz przyrostek -dirty przy
-zmianach, produkuje ELF/HEX/BIN, mapę i raporty stosu `.su` w `build/`.
-W CubeIDE wykonaj Clean/Build po aktualizacji. Aby mieć SHA w metadanych,
-zdefiniuj `FIRMWARE_COMMIT` jako literał tekstowy bieżącego commita; bez niego
-wartość to jawne `unspecified`, wersja pozostaje 2.0.0-p0.
+`/ścieżka/arm-none-eabi-`. Skrypt produkuje ELF/HEX/BIN, mapę, raporty `.su`
+i `memory-report.json`. Zarówno ten skrypt, jak i prebuild Debug/Release w
+CubeIDE uruchamiają `tools/write_build_info.py`. Wymagane Python (`python`
+w PATH CubeIDE) i Git. SHA to dokładne 40 znaków commita; zmiany robocze
+mają oddzielną flagę `firmware_dirty`. Nie ma fallbacku `unspecified`.
+Po aktualizacji projektu w CubeIDE wykonaj Clean/Build. W archiwum bez .git
+należy przywrócić pochodzenie źródeł; build ma zgłosić problem, a nie podawać
+fałszywego SHA.
 
 TIM2 oraz DMA są obsługiwane w kodzie użytkownika; .ioc zapisuje nowe piny,
 lecz nie generuje tych sterowników. Przy ponownej generacji CubeMX zachowaj
@@ -202,7 +212,7 @@ handlerów TIM2/EXTI/DMA. Aktualizacje oprogramowania wykonuj po zatrzymaniu log
 
 ## Weryfikacja i odbiór sprzętowy
 
-Testy hosta (14 programów, ASan + UBSan, ostrzeżenia jako błędy) obejmują:
+Testy hosta (15 programów, ASan + UBSan, ostrzeżenia jako błędy) obejmują:
 ponad 2 h wirtualnego zegara z każdym przepełnieniem, odcięcie programowania
 boot ID na każdym kroku, DMA/parowanie/utratę świeżości/clipping, przepełnienia
 kolejek i luki NR, transport UBX i opóźnione parsowanie, N/R/I, niepełne epoki,

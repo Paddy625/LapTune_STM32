@@ -13,6 +13,8 @@ typedef struct {
 } ImuRecord;
 typedef struct {
     uint32_t acquired,dropped,spi_errors,pair_errors,clipped,missed_drdy;
+    uint64_t start_us,last_drop_us;
+    uint32_t high_water,last_drop_nr,last_drop_reason;
     uint64_t first_us,last_us;
     uint32_t min_dt_us,max_dt_us,max_pair_us;
 } ImuDiagnostics;
@@ -23,6 +25,11 @@ void ImuStream_OnDrdy(uint8_t gyro);
 void ImuStream_OnComplete(void);
 void ImuStream_OnError(void);
 uint8_t ImuStream_Pop(ImuRecord *record);
+uint8_t ImuStream_Peek(ImuRecord *record);
+void ImuStream_Consume(void);
+uint16_t ImuStream_Count(void);
+uint8_t ImuStream_Stalled(uint32_t timeout_us);
+ImuDiagnostics ImuStream_Snapshot(void);
 void ImuStream_Service(void);
 void ImuStream_Scale(const ImuRecord *record,LSM6DS3_Sample *sample);
 #ifdef LAPTUNE_HOST_TEST

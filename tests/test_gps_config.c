@@ -13,6 +13,7 @@ static int powered,rx_connected,corrupt_reply,nak,nak_port,ignore_port,ignore_me
 static int drop_ack;
 static unsigned transmissions,port_sets,rate_polls;
 uint32_t HAL_GetTick(void) { return tick; }
+HAL_StatusTypeDef HAL_UART_AbortTransmit(UART_HandleTypeDef *u) { assert(u==&uart); return HAL_OK; }
 static void feed(const uint8_t *bytes,unsigned length)
 {
     if (!powered || !target || uart.Init.BaudRate!=receiver_baud) return;
@@ -50,9 +51,10 @@ HAL_StatusTypeDef HAL_UART_Init(UART_HandleTypeDef *handle)
     assert(handle->Init.BaudRate==GPS_BOOT_BAUD || handle->Init.BaudRate==GPS_RUN_BAUD);
     return HAL_OK;
 }
-HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *handle,const uint8_t *p,uint16_t len,uint32_t timeout)
+HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *handle,const uint8_t *p,uint16_t len)
 {
-    assert(handle==&uart && timeout<=100 && len>=8 && p[0]==0xB5 && p[1]==0x62 && (p[2]==6 || p[2]==0x0A));
+    assert(handle==&uart && len>=8 && p[0]==0xB5 && p[1]==0x62 && (p[2]==6 || p[2]==0x0A));
+    GPS_OnTxComplete(handle);
     ++transmissions;
     if (fail_tx) return HAL_TIMEOUT;
     unsigned size=(unsigned)p[4]|((unsigned)p[5]<<8); assert(size+8==len);
@@ -129,7 +131,7 @@ static void reset(uint32_t baud,uint32_t start)
 {
     tick=start; receiver_baud=baud; last_nav=tick; measurement=1000; nav_rate=time_ref=1;
     memset(message_rates,0,sizeof(message_rates)); for (unsigned i=0;i<=5;++i) message_rates[0][i]=1;
-    drop_ack=0; powered=rx_connected=1; corrupt_reply=nak=nak_port=ignore_port=ignore_message=ignore_rate=fail_tx=fail_init=short_reply=0;
+    uart.ErrorCode=0; drop_ack=0; powered=rx_connected=1; corrupt_reply=nak=nak_port=ignore_port=ignore_message=ignore_rate=fail_tx=fail_init=short_reply=0;
     transmissions=port_sets=rate_polls=0; target=NULL; uart.Init.BaudRate=GPS_BOOT_BAUD;
     assert(GPS_Init(&uart)==HAL_OK);
 }
@@ -160,6 +162,13 @@ int main(void)
         }
     }
     assert(updates>=5 && GPS_GetData()->altitude_valid && GPS_GetData()->altitude_mm==545400);
+    uint32_t runtime=tick; uart.ErrorCode=HAL_UART_ERROR_FE|HAL_UART_ERROR_ORE;
+    GPS_OnError(&uart); step();
+    assert(gps_diag.uart_by_phase[1][0]==1 && gps_diag.uart_by_phase[1][2]==1);
+    assert(gps_diag.uart_first_us==(uint64_t)runtime*1000 && gps_diag.uart_last_us==gps_diag.uart_first_us);
+    runtime=tick; uart.ErrorCode=HAL_UART_ERROR_NE; GPS_OnError(&uart); step();
+    assert(gps_diag.uart_by_phase[1][1]==1 && gps_diag.uart_errors==2 && gps_diag.uart_last_us==(uint64_t)runtime*1000);
+    uart.ErrorCode=0;
     /* A second MCU boot with the receiver still running at 38400. */
     uart.Init.BaudRate=GPS_BOOT_BAUD; assert(GPS_Init(&uart)==HAL_OK);
     until(GPS_CONFIG_READY,3000); check_ready(); assert(port_sets==1);
@@ -198,5 +207,14 @@ int main(void)
     assert(GPS_GetData()->altitude_mm==old_altitude);
     sentence("GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,123.4,M,46.9,M,,");
     GPS_Process(tick); assert(GPS_GetData()->altitude_mm==old_altitude);
+    reset(GPS_BOOT_BAUD,0); uart.ErrorCode=HAL_UART_ERROR_FE;
+    for (unsigned n=0;n<13;++n) { tick+=5; GPS_OnError(&uart); step(); }
+    uart.ErrorCode=0; uint64_t first_error=gps_diag.uart_first_us,last_error=gps_diag.uart_last_us;
+    until(GPS_CONFIG_READY,6000); check_ready();
+    for (unsigned n=0;n<200;++n) step();
+    assert(gps_diag.uart_errors==13 && gps_diag.uart_by_phase[0][0]==13 && !gps_diag.uart_by_phase[1][0]);
+    powered=0; uint32_t outage=tick; while ((uint32_t)(tick-outage)<3500U) step();
+    powered=1; receiver_baud=GPS_BOOT_BAUD; until(GPS_CONFIG_READY,6000);
+    assert(gps_diag.uart_errors==13 && gps_diag.uart_first_us==first_error && gps_diag.uart_last_us==last_error);
     puts("PASS GPS config: UBX checksums/readback, 5Hz/38400, message rates, MCU/receiver restarts, missing RX, NAK, verification, UART faults and wrap");
 }

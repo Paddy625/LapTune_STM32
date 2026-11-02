@@ -15,12 +15,10 @@ root = repo / 'LapTune'
 out = args.out.resolve() / args.mode
 out.mkdir(parents=True, exist_ok=True)
 prefix = os.environ.get('ARM_GCC_PREFIX', 'arm-none-eabi-')
+subprocess.run([os.environ.get('PYTHON', 'python3'), str(repo / 'tools/write_build_info.py')], check=True)
 commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repo, text=True).strip()
-if subprocess.check_output(['git', 'status', '--porcelain'], cwd=repo, text=True).strip():
-    commit += '-dirty'
 flags = ['-mcpu=cortex-m3', '-mthumb', '-mfloat-abi=soft', '-ffunction-sections',
-         '-fdata-sections', '-fstack-usage', '-Wall', '-DUSE_HAL_DRIVER', '-DSTM32F103xB',
-         f'-DFIRMWARE_COMMIT="{commit}"']
+         '-fdata-sections', '-fstack-usage', '-Wall', '-DUSE_HAL_DRIVER', '-DSTM32F103xB']
 flags += ['-g3', '-O0', '-DDEBUG'] if args.mode == 'Debug' else ['-g0', '-Os']
 for inc in ('Core/Inc', 'Drivers/STM32F1xx_HAL_Driver/Inc',
             'Drivers/STM32F1xx_HAL_Driver/Inc/Legacy',
@@ -46,4 +44,6 @@ subprocess.run([prefix + 'gcc', '-mcpu=cortex-m3', '-mthumb', '-mfloat-abi=soft'
 for fmt, ext in (('ihex', 'hex'), ('binary', 'bin')):
     subprocess.run([prefix + 'objcopy', '-O', fmt, str(elf), str(out / ('LapTune.' + ext))], check=True)
 subprocess.run([prefix + 'size', str(elf)], check=True)
+from report_memory import report
+report(prefix, elf)
 print(f'{args.mode}: {len(sources)} sources; commit={commit}; {out}')

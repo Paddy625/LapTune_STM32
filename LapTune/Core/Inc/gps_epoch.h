@@ -4,14 +4,19 @@
 #define GPS_EPOCH_TIMEOUT_US 800000ULL
 #define GPS_ASSEMBLY_DEADLINE_US 80000ULL
 typedef struct {
-    uint64_t published_us;
+    uint64_t published_us,rx_us;
     int32_t latitude_e7,longitude_e7,altitude_mm;
     uint32_t speed_millikmh,fix_id,itow_ms;
-    uint8_t position_valid,speed_valid,altitude_valid,reserved;
+    uint8_t position_valid,speed_valid,altitude_valid,epoch_known;
 } GPS_Fix;
 typedef struct {
     uint32_t checksum_errors,uart_errors,rx_overflows,incomplete,late,invalid_fixes,epoch_count,bad_period,history_misses;
-    uint32_t min_period_ms,max_period_ms;
+    uint32_t min_period_ms,max_period_ms,received_epochs,valid_epochs;
+    uint32_t uart_by_phase[2][5]; /* init/reconfigure, runtime; FE,NE,ORE,PE,other */
+    uint64_t uart_first_us,uart_last_us,checksum_first_us,checksum_last_us;
+    uint64_t uart_phase_first_us[2],uart_phase_last_us[2];
+    uint32_t checksum_by_phase[2],tx_errors;
+
 } GPS_Diagnostics;
 extern GPS_Diagnostics gps_diag;
 void GPS_Epoch_Init(void);

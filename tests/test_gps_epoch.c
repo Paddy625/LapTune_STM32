@@ -23,7 +23,9 @@ int main(void)
     assert(b.fix_id==3 && b.position_valid && !b.altitude_valid && !b.speed_valid && gps_diag.incomplete==1);
     epoch(1400,590000,2,3); GPS_Epoch_ForSample(600000,&a); assert(!memcmp(&a,&b,sizeof(a)) && gps_diag.late);
     epoch(1600,700000,1,3); GPS_Epoch_Service(&data,780000); GPS_Epoch_ForSample(780000,&a);
-    assert(!a.position_valid && gps_diag.invalid_fixes==1);
+    assert(!a.position_valid && a.epoch_known && a.itow_ms==1600 && gps_diag.invalid_fixes==1);
+    GPS_Epoch_Service(&data,780100); assert(gps_diag.invalid_fixes==1);
+    assert(gps_diag.received_epochs==4 && gps_diag.valid_epochs==3 && gps_diag.epoch_count==4);
     epoch(1800,900000,7,3); GPS_Epoch_Service(&data,1702000); GPS_Epoch_ForSample(1702000,&a);
     assert(!a.position_valid && !data.position_valid);
     for (unsigned sec=5;sec<=20;sec+=5) { GPS_Epoch_Service(&data,900000+(uint64_t)sec*1000000); GPS_Epoch_ForSample(900000+(uint64_t)sec*1000000,&a); assert(!a.position_valid); }

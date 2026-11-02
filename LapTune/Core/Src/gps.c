@@ -6,6 +6,9 @@
 #define RX_CAPACITY 1024U
 static UART_HandleTypeDef *gps_uart;
 static uint8_t rx_byte;
+static uint8_t tx_packet[28];
+static volatile uint8_t tx_busy;
+static uint64_t tx_started;
 static volatile uint8_t queue[RX_CAPACITY];
 static volatile uint16_t head, tail;
 static volatile uint8_t restart_rx, overflow;
@@ -39,18 +42,23 @@ static void config_error(GPS_ConfigError reason,uint32_t now)
 }
 static HAL_StatusTypeDef send_frame(uint8_t cls,uint8_t id,const uint8_t *payload,uint8_t length)
 {
-    uint8_t packet[28]={0xB5,0x62,cls,id,length,0};
+    if (tx_busy || length>20) return HAL_BUSY;
+    uint8_t *packet=tx_packet;
+    packet[0]=0xB5; packet[1]=0x62; packet[2]=cls; packet[3]=id; packet[4]=length; packet[5]=0;
     if (length) memcpy(packet+6,payload,length);
     uint8_t a=0,b=0;
     for (unsigned i=2;i<6U+length;++i) { a+=packet[i]; b+=a; }
     packet[6U+length]=a; packet[7U+length]=b;
-    return HAL_UART_Transmit(gps_uart,packet,(uint16_t)(length+8U),80U);
+    tx_started=Timebase_NowUs(); tx_busy=1;
+    HAL_StatusTypeDef result=HAL_UART_Transmit_IT(gps_uart,packet,(uint16_t)(length+8U));
+    if (result!=HAL_OK) { tx_busy=0; ++gps_diag.tx_errors; }
+    return result;
 }
 static HAL_StatusTypeDef send_ubx(uint8_t id,const uint8_t *payload,uint8_t length)
 { return send_frame(6,id,payload,length); }
 static uint8_t change_baud(uint32_t baud)
 {
-    if (HAL_UART_AbortReceive(gps_uart)!=HAL_OK) return 0;
+    if (tx_busy || HAL_UART_AbortReceive(gps_uart)!=HAL_OK) return 0;
     tail=head; ubx_state=0; restart_rx=overflow=0;
     boundary_tail=boundary_head; irq_ubx_state=0;
     gps_uart->Init.BaudRate=baud;
@@ -126,7 +134,11 @@ static void ubx_byte(uint8_t ch,uint32_t now)
     case 8:
         ubx_state=0;
         if (ubx_check==ubx_a && ch==ubx_b && (ubx_length<=sizeof(ubx_payload) || (ubx_class==0x0A && ubx_id==4))) packet_received(now);
-        else if (ubx_check!=ubx_a || ch!=ubx_b) ++gps_diag.checksum_errors;
+        else if (ubx_check!=ubx_a || ch!=ubx_b) {
+            if (!gps_diag.checksum_errors) gps_diag.checksum_first_us=packet_us;
+            gps_diag.checksum_last_us=packet_us;
+            ++gps_diag.checksum_errors; ++gps_diag.checksum_by_phase[configuration.state==GPS_CONFIG_READY];
+        }
         break;
     default: ubx_state=0; break;
     }
@@ -204,7 +216,7 @@ HAL_StatusTypeDef GPS_Init(UART_HandleTypeDef *uart)
 {
     if (uart == NULL) return HAL_ERROR;
     gps_uart = uart; head = tail = 0;
-    restart_rx = overflow = 0;
+    restart_rx = overflow = tx_busy = 0;
     GPS_NMEA_Init(&data);
     GPS_Epoch_Init();
     boundary_head=boundary_tail=irq_ubx_state=0;
@@ -245,14 +257,43 @@ void GPS_OnRxComplete(UART_HandleTypeDef *uart)
         restart_rx = 1;
 }
 
+void GPS_OnTxComplete(UART_HandleTypeDef *uart)
+{ if (uart==gps_uart) tx_busy=0; }
 void GPS_OnError(UART_HandleTypeDef *uart)
 {
-    if (uart == gps_uart && gps_uart != NULL) { restart_rx = 1; ++gps_diag.uart_errors; }
+    if (uart!=gps_uart || !gps_uart) return;
+    uint64_t t=Timebase_NowUs();
+    if (!gps_diag.uart_errors) gps_diag.uart_first_us=t;
+    gps_diag.uart_last_us=t; ++gps_diag.uart_errors;
+    const uint32_t bits[]={HAL_UART_ERROR_FE,HAL_UART_ERROR_NE,HAL_UART_ERROR_ORE,HAL_UART_ERROR_PE};
+    uint32_t error=uart->ErrorCode,known=0;
+    unsigned phase_index=configuration.state==GPS_CONFIG_READY;
+    uint32_t previous=0; for (unsigned i=0;i<5;++i) previous+=gps_diag.uart_by_phase[phase_index][i];
+    if (!previous) gps_diag.uart_phase_first_us[phase_index]=t;
+    gps_diag.uart_phase_last_us[phase_index]=t;
+    for (unsigned i=0;i<4;++i) { known|=bits[i]; if (error&bits[i]) ++gps_diag.uart_by_phase[phase_index][i]; }
+    if (!error || (error&~known)) ++gps_diag.uart_by_phase[phase_index][4];
+    restart_rx=1;
+}
+GPS_Diagnostics GPS_DiagnosticsSnapshot(void)
+{
+#ifndef LAPTUNE_HOST_TEST
+    uint32_t mask=__get_PRIMASK(); __disable_irq();
+#endif
+    GPS_Diagnostics d=gps_diag;
+#ifndef LAPTUNE_HOST_TEST
+    __set_PRIMASK(mask);
+#endif
+    return d;
 }
 
 void GPS_Process(uint32_t now)
 {
     if (gps_uart == NULL) return;
+    if (tx_busy && Timebase_NowUs()-tx_started>100000U) {
+        (void)HAL_UART_AbortTransmit(gps_uart); tx_busy=0; ++gps_diag.tx_errors;
+        config_error(GPS_CFG_UART,now);
+    }
     if (overflow) { overflow=0; ++gps_diag.rx_overflows; restart_rx=1; }
     if (restart_rx) {
         restart_rx = 0;

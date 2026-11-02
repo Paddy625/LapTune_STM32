@@ -2,7 +2,7 @@
 #define TEST_HAL_H
 #include <stdint.h>
 typedef struct { struct { uint32_t BaudRatePrescaler; } Init; } SPI_HandleTypeDef;
-typedef struct { struct { uint32_t BaudRate; } Init; } UART_HandleTypeDef;
+typedef struct { struct { uint32_t BaudRate; } Init; uint32_t ErrorCode; } UART_HandleTypeDef;
 typedef struct { unsigned unused; } GPIO_TypeDef;
 extern GPIO_TypeDef gpio_a, gpio_b;
 #define GPIOA (&gpio_a)
@@ -29,6 +29,12 @@ HAL_StatusTypeDef HAL_SPI_Init(SPI_HandleTypeDef *);
 HAL_StatusTypeDef HAL_UART_Receive_IT(UART_HandleTypeDef *, uint8_t *, uint16_t);
 HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef *);
 HAL_StatusTypeDef HAL_UART_Init(UART_HandleTypeDef *);
+#define HAL_UART_ERROR_PE 1U
+#define HAL_UART_ERROR_FE 2U
+#define HAL_UART_ERROR_NE 4U
+#define HAL_UART_ERROR_ORE 8U
+HAL_StatusTypeDef HAL_UART_AbortTransmit(UART_HandleTypeDef *);
+HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *, const uint8_t *, uint16_t);
 HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *, const uint8_t *, uint16_t, uint32_t);
 void HAL_GPIO_WritePin(GPIO_TypeDef *, uint16_t, GPIO_PinState);
 void HAL_Delay(uint32_t);

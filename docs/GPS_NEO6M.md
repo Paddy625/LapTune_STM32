@@ -10,7 +10,7 @@ specyfikacji konkretnego breakouta; poziomy UART przy STM32 muszą wynosić
 | RX | PB10 / D6 / CN9/7 / USART3_TX |
 | GND | GND |
 | VCC | 3V3, jeżeli moduł dopuszcza zasilanie 3,3 V |
-| PPS | Niepodłączony w P0; planowany osobno w P1 |
+| PPS | **PA0 / A0 / CN8 pin 1 / TIM2_CH1**, przechwytywanie zboczy |
 
 ## Konfiguracja odbiornika
 
@@ -37,7 +37,8 @@ wyłączane; nadmiar ujawni się jako przepełnienie bufora.
 
 Bufor UART: 1024 bajty, przerwanie odbioru jednego bajtu. Koniec ramki dostaje
 64-bitowy czas w ISR; checksum i interpretacja są wykonywane poza ISR.
-Sterownik SD wywołuje obsługę GPS podczas oczekiwania na kartę.
+Konfiguracja TX korzysta z przerwań i trwałego bufora, bez blokującego
+HAL_UART_Transmit. Sterownik SD wywołuje obsługę GPS podczas oczekiwania na kartę.
 USART3 nie korzysta tutaj z DMA; IMU ma osobne DMA SPI2.
 
 ## Spójność i jednostki
@@ -61,7 +62,7 @@ z jednej epoki UBX. S oznacza satelity z NAV-SOL, ALT oznacza MSL.
 świeżej komunikacji. Diagnostyka konfiguracji nadal jest pokazywana na TFT.
 
 `T_IMU_US`, GPS_STATE, GPS_FIX_ID, GPS_ITOW_MS oraz ograniczenie czasów odbioru
-opisano w [P0_LOGGER.md](P0_LOGGER.md). Nie ma jeszcze synchronizacji PPS
-ani skorygowania latencji GNSS. Model dynamiki, oszczędzanie energii i static
+opisano w [P0_LOGGER.md](P0_LOGGER.md). Jest sprzętowe przechwytywanie PPS, ale nie ma jeszcze zweryfikowanego
+mapowania impuls–tydzień/iTOW ani skorygowania latencji GNSS. Model dynamiki, oszczędzanie energii i static
 hold nie są w P0 zmieniane ani uznawane za zweryfikowane. Są do osobnej
 weryfikacji na konkretnym firmware NEO-6 podczas kolejnego etapu.

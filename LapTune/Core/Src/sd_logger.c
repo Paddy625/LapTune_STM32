@@ -8,13 +8,17 @@
 #include <stdio.h>
 #include <string.h>
 
-#define CAPACITY 16U
+#define CAPACITY SD_LOG_QUEUE_CAPACITY
 static struct Record {
     ImuRecord imu; LogTime time; GPS_Fix gps;
 } queue[CAPACITY];
 static unsigned head,tail,count;
 static uint32_t last_sync,file_started,last_attempt,last_button,last_fix_id;
 static unsigned file_number,rotation_records;
+static uint32_t snapshot_ms,file_last_nr,file_records,file_synced_records;
+static uint64_t file_last_sample_us;
+SDLogger_Diagnostics sd_diag;
+unsigned SDLogger_RecordBytes(void) { return sizeof(queue[0]); }
 static volatile uint8_t stop_requested,resume_requested,automatic_enabled;
 static uint8_t opened,rotation_pending,recovery_pending,acquisition_fault,have_button;
 static FATFS fs;
@@ -37,9 +41,13 @@ DWORD get_fattime(void)
 }
 static void fail(FRESULT result,LogState state)
 {
+    if (state==LOG_CARD_ERROR && result==FR_DENIED) state=LOG_FULL;
     /* A failed best-effort close must not hide the original I/O/init failure. */
     if (sd_log_state<LOG_CARD_ERROR) {
         sd_log_error=result; sd_log_state=state; recovery_pending=1;
+        if (!sd_diag.init_failures) { sd_diag.first_error_us=Timebase_NowUs(); sd_diag.first_error_code=result; }
+        ++sd_diag.init_failures; sd_diag.last_error_us=Timebase_NowUs(); sd_diag.last_error_code=result;
+        sd_diag.clean_shutdown=0;
     }
 }
 void SDLogger_StatusText(char text[26])
@@ -76,9 +84,21 @@ void SDLogger_StatusText(char text[26])
     (void)snprintf(text,26,"%-12s%-12s ",label,sd_log_filename);
 }
 static uint8_t failed(void) { return sd_log_state>=LOG_CARD_ERROR; }
-static void discard_queue(void)
+static void drop_records(unsigned n,uint32_t reason)
 {
-    sd_log_dropped+=count; head=tail=count=0; rotation_pending=0; rotation_records=0;
+    if (n) {
+        sd_diag.last_drop_nr=queue[(tail+n-1U)%CAPACITY].imu.nr;
+        sd_diag.last_drop_us=Timebase_NowUs(); sd_diag.last_drop_reason=reason;
+        sd_log_dropped+=n; tail=(tail+n)%CAPACITY; count-=n; sd_diag.queue_depth=count;
+    }
+}
+static void confirmed_sync(void)
+{
+    sd_diag.synced_records+=file_records-file_synced_records; file_synced_records=file_records;
+    if (file_records) {
+        sd_diag.last_synced_nr=file_last_nr; sd_diag.last_synced_sample_us=file_last_sample_us;
+        sd_diag.last_synced_us=Timebase_NowUs();
+    }
 }
 static void open_next_file(void)
 {
@@ -92,9 +112,9 @@ static void open_next_file(void)
         if (r!=FR_EXIST) break;
     }
     if (r!=FR_OK) { fail(r,r==FR_EXIST || r==FR_DENIED ? LOG_FULL : LOG_CARD_ERROR); return; }
-    opened=1;
+    opened=1; file_records=file_synced_records=file_last_nr=0; file_last_sample_us=0;
     (void)strcpy(sd_log_filename,name);
-    static const char header[]="NR;DATA;CZAS;ACC_X;ACC_Y;ACC_Z;GYRO_X;GYRO_Y;GYRO_Z;GPS_LAT;GPS_LON;GPS_SPEED_KMH;GPS_ALT_MSL_M;T_IMU_US;GPS_STATE;GPS_FIX_ID;GPS_ITOW_MS;IMU_VALID;IMU_FLAGS;T_ACC_US;T_GYRO_US;IMU_DROPPED;IMU_SPI_ERRORS;IMU_PAIR_ERRORS;GPS_UART_ERRORS;GPS_CHECKSUM_ERRORS;GPS_INCOMPLETE_EPOCHS;GPS_LATE_EPOCHS;SD_QUEUE_DROPPED;SD_MAX_PAUSE_US;IMU_MISSED_DRDY;GPS_RX_OVERFLOWS;GPS_INVALID_FIXES\r\n";
+    static const char header[]="NR;DATA;CZAS;ACC_X;ACC_Y;ACC_Z;GYRO_X;GYRO_Y;GYRO_Z;GPS_LAT;GPS_LON;GPS_SPEED_KMH;GPS_ALT_MSL_M;T_IMU_US;GPS_STATE;GPS_FIX_ID;GPS_ITOW_MS;IMU_VALID;IMU_FLAGS;T_ACC_US;T_GYRO_US;IMU_DROPPED;IMU_SPI_ERRORS;IMU_PAIR_ERRORS;GPS_UART_ERRORS;GPS_CHECKSUM_ERRORS;GPS_INCOMPLETE_EPOCHS;GPS_LATE_EPOCHS;SD_QUEUE_DROPPED;SD_MAX_PAUSE_US;IMU_MISSED_DRDY;GPS_RX_OVERFLOWS;GPS_INVALID_FIXES;GPS_T_RX_US;GPS_T_MEAS_US;TIME_SYNC_STATE\r\n";
     UINT wrote=0;
     r=f_write(&file,header,sizeof(header)-1,&wrote);
     if (r==FR_OK && wrote!=sizeof(header)-1) r=FR_DENIED;
@@ -105,7 +125,7 @@ static void open_next_file(void)
 static void close_file(void)
 {
     FRESULT r=f_close(&file); opened=0;
-    if (r!=FR_OK) fail(r,LOG_CARD_ERROR);
+    if (r!=FR_OK) fail(r,LOG_CARD_ERROR); else confirmed_sync();
 }
 static void cleanup_failure(void)
 {
@@ -113,12 +133,13 @@ static void cleanup_failure(void)
     /* After a card I/O failure, abandon the old FIL/cache before any remount.
        Never replay its FAT writes onto a newly inserted, possibly different card. */
     if (opened && sd_log_state!=LOG_CARD_ERROR) close_file();
-    opened=0; discard_queue();
+    opened=0; rotation_pending=rotation_records=0; /* Preserve unattempted records for retry. */
     (void)f_mount(NULL,"",0);
     memset(&file,0,sizeof(file)); recovery_pending=0; last_attempt=HAL_GetTick();
 }
 static void connect_card(void)
 {
+    ++sd_diag.mount_attempts; sd_diag.clean_shutdown=0;
     (void)f_mount(NULL,"",0);
     sd_log_error=0; sd_log_state=LOG_OFF; sd_log_filename[0]='\0';
     FRESULT r=f_mount(&fs,"",1);
@@ -146,7 +167,11 @@ static void connect_card(void)
     metadata_gps_known=strcmp(GPS_SoftwareVersion(),"unknown")!=0;
     metadata_config_state=GPS_GetConfig()->state; metadata_imu_verified=lsm6ds3_config_verified;
     open_next_file();
-    if (sd_log_state==LOG_OFF && opened) sd_log_state=LOG_RECORDING;
+    if (sd_log_state==LOG_OFF && opened) {
+        sd_log_state=LOG_RECORDING;
+        if (!sd_diag.sd_ready_us) sd_diag.sd_ready_us=Timebase_NowUs();
+    }
+    snapshot_ms=HAL_GetTick();
 }
 static void pause_since(uint64_t start)
 {
@@ -156,6 +181,7 @@ static void pause_since(uint64_t start)
 void SDLogger_Start(void)
 {
     uint64_t start=Timebase_NowUs();
+    memset(&sd_diag,0,sizeof(sd_diag));
     head=tail=count=0; sd_log_written=sd_log_dropped=sd_max_pause_us=last_fix_id=0;
     file_number=0; session_selected=0; sd_log_session_dir[0]=0;
     rotation_records=0; rotation_pending=recovery_pending=acquisition_fault=have_button=0;
@@ -177,15 +203,21 @@ void SDLogger_DataLoss(void)
     acquisition_fault=1;
     if (sd_log_state==LOG_RECORDING) { ++sd_log_dropped; fail(FR_INT_ERR,LOG_DATA_LOSS); }
 }
-uint8_t SDLogger_CanAccept(void) { return sd_log_state!=LOG_RECORDING || count<CAPACITY; }
-void SDLogger_AppendRaw(const ImuRecord *record,LogTime time)
+uint8_t SDLogger_Ready(void) { return opened && sd_log_state==LOG_RECORDING && automatic_enabled && !stop_requested; }
+uint8_t SDLogger_CanAccept(void) { return !automatic_enabled || (SDLogger_Ready() && count<CAPACITY); }
+uint8_t SDLogger_AppendRaw(const ImuRecord *record,LogTime time)
 {
     acquisition_fault=0;
-    if (sd_log_state!=LOG_RECORDING || stop_requested || !automatic_enabled) { ++sd_log_dropped; return; }
-    if (count==CAPACITY) { ++sd_log_dropped; fail(FR_INT_ERR,LOG_DATA_LOSS); return; }
+    if (!automatic_enabled) { /* An explicit pause, never a not-ready retry. */
+        ++sd_log_dropped; sd_diag.last_drop_nr=record->nr; sd_diag.last_drop_reason=5;
+        sd_diag.last_drop_us=Timebase_NowUs(); return 1;
+    }
+    if (!SDLogger_Ready() || count==CAPACITY) return 0; /* Caller retains ownership. */
     queue[head].imu=*record; queue[head].time=time;
     GPS_Epoch_ForSample(record->t_us,&queue[head].gps);
-    head=(head+1U)%CAPACITY; ++count;
+    head=(head+1U)%CAPACITY; ++count; sd_diag.queue_depth=count;
+    if (count>sd_diag.queue_high_water) sd_diag.queue_high_water=count;
+    return 1;
 }
 static void fixed(char out[24],int64_t value,unsigned factor,unsigned digits)
 {
@@ -210,6 +242,8 @@ static unsigned format(char out[512],const struct Record *r,uint32_t prior_fix)
     if (!r->imu.flags) for (unsigned i=0;i<6;++i) fixed(value[i],(int64_t)r->imu.raw[i]*(i<3 ? 488 : 70000),1000000,6);
     if (r->gps.position_valid) {
         fixed(navigation[0],r->gps.latitude_e7,10000000,7); fixed(navigation[1],r->gps.longitude_e7,10000000,7);
+    }
+    if (r->gps.epoch_known) {
         (void)snprintf(id,sizeof(id),"%lu",(unsigned long)r->gps.fix_id);
         (void)snprintf(itow,sizeof(itow),"%lu",(unsigned long)r->gps.itow_ms);
     }
@@ -222,16 +256,17 @@ static unsigned format(char out[512],const struct Record *r,uint32_t prior_fix)
     uint32_t skew=r->imu.acc_minus_gyro_us<0 ? (uint32_t)-(int64_t)r->imu.acc_minus_gyro_us : (uint32_t)r->imu.acc_minus_gyro_us;
     if (r->imu.acc_minus_gyro_us<0) acc=acc>=skew ? acc-skew : 0;
     else gyro=gyro>=skew ? gyro-skew : 0;
-    char t[21],ta[21],tg[21];
+    char t[21],ta[21],tg[21],rx[21]="";
+    if (r->gps.epoch_known) decimal64(rx,r->gps.rx_us);
     decimal64(t,r->imu.t_us); decimal64(ta,acc); decimal64(tg,gyro);
-    return (unsigned)snprintf(out,512,"%lu;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%c;%s;%s;%u;%u;%s;%s;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%lu\r\n",
+    return (unsigned)snprintf(out,512,"%lu;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%c;%s;%s;%u;%u;%s;%s;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%s;;0\r\n",
         (unsigned long)r->imu.nr,date,time,value[0],value[1],value[2],value[3],value[4],value[5],
         navigation[0],navigation[1],navigation[2],navigation[3],t,!r->gps.position_valid ? 'I' : (r->gps.fix_id==prior_fix ? 'R' : 'N'),id,itow,
         !r->imu.flags,r->imu.flags,ta,tg,
         (unsigned long)imu_diag.dropped,(unsigned long)imu_diag.spi_errors,(unsigned long)imu_diag.pair_errors,
         (unsigned long)gps_diag.uart_errors,(unsigned long)gps_diag.checksum_errors,(unsigned long)gps_diag.incomplete,
         (unsigned long)gps_diag.late,(unsigned long)sd_log_dropped,(unsigned long)sd_max_pause_us,(unsigned long)imu_diag.missed_drdy,
-        (unsigned long)gps_diag.rx_overflows,(unsigned long)gps_diag.invalid_fixes);
+        (unsigned long)gps_diag.rx_overflows,(unsigned long)gps_diag.invalid_fixes,rx);
 }
 static void process(uint32_t now)
 {
@@ -271,9 +306,20 @@ static void process(uint32_t now)
             uint64_t start=Timebase_NowUs(); FRESULT r=f_write(&file,batch,bytes,&wrote);
             uint64_t elapsed=Timebase_NowUs()-start;
             if (elapsed>sd_max_pause_us) sd_max_pause_us=(uint32_t)elapsed;
-            if (r!=FR_OK || wrote!=bytes) { fail(r==FR_OK ? FR_DENIED : r,r==FR_OK ? LOG_FULL : LOG_CARD_ERROR); }
+            if (r!=FR_OK || wrote!=bytes) {
+                /* Only this attempted batch is uncertain. Unattempted queue entries stay owned. */
+                drop_records(records,7); fail(r==FR_OK ? FR_DENIED : r,r==FR_OK ? LOG_FULL : LOG_CARD_ERROR);
+            }
             else {
-                tail=(tail+records)%CAPACITY; count-=records; sd_log_written+=records; last_fix_id=batch_fix;
+                const ImuRecord *first=&queue[tail].imu,*last=&queue[(tail+records-1U)%CAPACITY].imu;
+                if (!sd_log_written) {
+                    sd_diag.first_written_us=Timebase_NowUs(); sd_diag.first_written_nr=first->nr;
+                    sd_diag.first_written_sample_us=first->t_us;
+                }
+                sd_diag.last_written_nr=file_last_nr=last->nr; file_last_sample_us=last->t_us;
+                file_records+=records;
+                tail=(tail+records)%CAPACITY; count-=records; sd_diag.queue_depth=count;
+                sd_log_written+=records; last_fix_id=batch_fix;
                 if (rotation_pending) rotation_records-=records;
             }
         }
@@ -284,23 +330,27 @@ static void process(uint32_t now)
         /* Keep accepting into RAM while close/open performs SD I/O. A stop arriving
            here still needs a new file if any samples are already queued. */
         if (sd_log_state==LOG_RECORDING) {
-            if (stop_requested && !count) sd_log_state=LOG_STOPPED;
-            else open_next_file();
+            if (!stop_requested || count) open_next_file();
         }
     }
-    if (sd_log_state==LOG_RECORDING && (uint32_t)(HAL_GetTick()-last_sync)>=SD_LOG_SYNC_INTERVAL_MS) {
+    if (opened && sd_log_state==LOG_RECORDING && (uint32_t)(HAL_GetTick()-last_sync)>=SD_LOG_SYNC_INTERVAL_MS) {
         FRESULT r=f_sync(&file); last_sync=HAL_GetTick();
-        if (r!=FR_OK) fail(r,LOG_CARD_ERROR);
+        if (r!=FR_OK) fail(r,LOG_CARD_ERROR); else confirmed_sync();
     }
-    if (sd_log_state==LOG_RECORDING && ((!metadata_gps_known && strcmp(GPS_SoftwareVersion(),"unknown")) ||
+    if (opened && sd_log_state==LOG_RECORDING && ((uint32_t)(HAL_GetTick()-snapshot_ms)>=SD_LOG_SNAPSHOT_INTERVAL_MS || (!metadata_gps_known && strcmp(GPS_SoftwareVersion(),"unknown")) ||
         metadata_config_state!=GPS_GetConfig()->state || metadata_imu_verified!=lsm6ds3_config_verified)) {
-        FRESULT r=Session_Write(sd_log_session_dir); metadata_gps_known=strcmp(GPS_SoftwareVersion(),"unknown")!=0;
+        FRESULT r=f_sync(&file);
+        if (r==FR_OK) { confirmed_sync(); r=Session_Write(sd_log_session_dir); }
+        snapshot_ms=HAL_GetTick(); metadata_gps_known=strcmp(GPS_SoftwareVersion(),"unknown")!=0;
         metadata_config_state=GPS_GetConfig()->state; metadata_imu_verified=lsm6ds3_config_verified;
         if (r!=FR_OK) fail(r,LOG_CARD_ERROR);
     }
-    if (opened && sd_log_state==LOG_RECORDING && stop_requested && count==0) {
-        close_file();
-        if (sd_log_state==LOG_RECORDING) { FRESULT r=Session_Write(sd_log_session_dir); if (r!=FR_OK) fail(r,LOG_CARD_ERROR); }
+    if (sd_log_state==LOG_RECORDING && stop_requested && count==0) {
+        if (opened) close_file();
+        if (sd_log_state==LOG_RECORDING) {
+            sd_diag.clean_shutdown=1;
+            FRESULT r=Session_Write(sd_log_session_dir); if (r!=FR_OK) fail(r,LOG_CARD_ERROR);
+        }
         if (sd_log_state==LOG_RECORDING) sd_log_state=LOG_STOPPED;
     }
     if (failed()) cleanup_failure();

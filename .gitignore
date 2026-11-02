@@ -1,3 +1,7 @@
 /.metadata/
 
 /build/
+
+/LapTune/Core/Inc/build_info.h
+
+__pycache__/

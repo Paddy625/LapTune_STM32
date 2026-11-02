@@ -32,7 +32,10 @@ Po błędzie montowanie jest ponawiane co 2 s. Nie odtwarzamy cache starego
 systemu plików na nowo włożonej karcie.
 
 DRDY i SPI2 DMA działają także podczas SD/TFT. Pierścień 255 rekordów
-przechowuje około 2,45 s IMU przy 104 Hz. Kolejka zapisu ma 16 rekordów.
+przechowuje około 2,45 s IMU przy 104 Hz. Kolejka zapisu ma 16 rekordów; jej zapełnienie zatrzymuje pobieranie z pierścienia.
+Przed pierwszym uzbrojeniem IMU wymagany jest przygotowany plik SD. Brak fixa
+lub UTC nie zatrzymuje zapisu. Szczegóły diagnostyki startu i pamięci:
+[P0_REVIEW_2026-11-02.md](P0_REVIEW_2026-11-02.md).
 Po przepełnieniu nie wstawiamy sztucznych próbek: luki NR oraz liczniki
 `IMU_DROPPED`, `IMU_MISSED_DRDY`, `SD_QUEUE_DROPPED` ujawniają utratę danych.
 Błędy osi są oddzielone od błędów karty; sześć pól wektorów jest wtedy pustych.
@@ -78,7 +81,7 @@ W debuggerze: `sd_log_state`, `sd_log_filename`, `sd_log_session_dir`,
 
 ## Testy
 
-`bash tests/run.sh` uruchamia 14 programów z ASan/UBSan, w tym rzeczywisty
-FatFs na obrazie FAT w RAM, format 33 kolumn, JSON/LFN, rotację, B1,
+`bash tests/run.sh` uruchamia 15 programów z ASan/UBSan, w tym rzeczywisty
+FatFs na obrazie FAT w RAM, format 36 kolumn, JSON/LFN, rotację, B1,
 wyjmowanie i zmianę karty, błędy, pełny wolumin oraz 30 minut czasu
 symulowanego. Testy sprzętowe i ich ograniczenia: [P0_LOGGER.md](P0_LOGGER.md).

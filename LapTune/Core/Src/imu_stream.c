@@ -18,15 +18,21 @@ static void unlock(uint32_t m) { __set_PRIMASK(m); }
 static uint32_t lock(void) { return 0; }
 static void unlock(uint32_t m) { (void)m; }
 #endif
+static void dropped(uint32_t nr,uint32_t reason)
+{
+    ++imu_diag.dropped; imu_diag.last_drop_nr=nr;
+    imu_diag.last_drop_reason=reason; imu_diag.last_drop_us=Timebase_NowUs();
+}
 static void publish(const ImuRecord *record)
 {
     uint16_t next=(head+1U)%IMU_STREAM_CAPACITY;
-    if (next==tail) { ++imu_diag.dropped; return; }
+    if (next==tail) { dropped(record->nr,2); return; }
     queue[head]=*record;
 #ifndef LAPTUNE_HOST_TEST
     __DMB();
 #endif
     head=next;
+    uint16_t used=ImuStream_Count(); if (used>imu_diag.high_water) imu_diag.high_water=used;
 }
 static void begin(void)
 {
@@ -74,7 +80,9 @@ uint8_t ImuStream_Start(void)
     lsm6ds3_config_verified=r==HAL_OK;
     memset(tx,0xFF,sizeof(tx)); tx[0]=0x9E;
     if (r!=HAL_OK) { active=0; return 0; }
-    ready=busy=0; pending_flags=0; first=1; active=1;
+    ready=busy=0; pending_flags=0; first=1;
+    if (!imu_diag.start_us) imu_diag.start_us=Timebase_NowUs();
+    active=1;
     /* Discard the first pair after arming; an already-high pin has no IRQ time. */
     if (HAL_GPIO_ReadPin(GPIOA,GPIO_PIN_1)==GPIO_PIN_SET) ImuStream_OnDrdy(0);
     if (HAL_GPIO_ReadPin(GPIOA,GPIO_PIN_4)==GPIO_PIN_SET) ImuStream_OnDrdy(1);
@@ -91,7 +99,7 @@ void ImuStream_OnDrdy(uint8_t gyro)
     if (!active) return;
     uint8_t bit=gyro ? 2 : 1;
     if (ready&bit) {
-        ++imu_diag.missed_drdy; ++imu_diag.acquired; ++imu_diag.dropped;
+        ++imu_diag.missed_drdy; ++imu_diag.acquired; dropped(imu_diag.acquired,3);
         pending_flags|=IMU_ERR_FRESH;
     }
     if (gyro) gyro_time=Timebase_NowUs(); else acc_time=Timebase_NowUs();
@@ -107,7 +115,7 @@ void ImuStream_OnComplete(void)
     for (unsigned i=0;i<3;++i) { flight.raw[i]=signed16(rx+11+2*i); flight.raw[i+3]=signed16(rx+5+2*i); }
     for (unsigned i=0;i<6;++i) if (flight.raw[i]==INT16_MIN || flight.raw[i]==INT16_MAX) flight.flags|=IMU_ERR_CLIP;
     if (flight.flags&IMU_ERR_CLIP) ++imu_diag.clipped;
-    if (first) { first=0; ++imu_diag.dropped; } else publish(&flight);
+    if (first) { first=0; dropped(flight.nr,1); } else publish(&flight);
     busy=0; begin();
 }
 void ImuStream_OnError(void)
@@ -115,7 +123,7 @@ void ImuStream_OnError(void)
     if (!busy) return;
     HAL_GPIO_WritePin(LSM6DS3_CS_PORT,LSM6DS3_CS_PIN,GPIO_PIN_SET);
     flight.flags|=IMU_ERR_SPI; ++imu_diag.spi_errors;
-    if (first) { first=0; ++imu_diag.dropped; } else publish(&flight);
+    if (first) { first=0; dropped(flight.nr,1); } else publish(&flight);
     busy=0;
 }
 void ImuStream_Service(void)
@@ -129,21 +137,36 @@ void ImuStream_Service(void)
     (void)HAL_SPI_Abort(&hspi2);
     HAL_GPIO_WritePin(LSM6DS3_CS_PORT,LSM6DS3_CS_PIN,GPIO_PIN_SET);
     failed.flags|=IMU_ERR_SPI|IMU_ERR_TIMEOUT; ++imu_diag.spi_errors;
-    if (discard) ++imu_diag.dropped; else publish(&failed);
+    if (discard) dropped(failed.nr,1); else publish(&failed);
     /* Foreground no-data recovery reinitializes and verifies the sensor. */
 }
-uint8_t ImuStream_Pop(ImuRecord *r)
+uint16_t ImuStream_Count(void) { return (head+IMU_STREAM_CAPACITY-tail)%IMU_STREAM_CAPACITY; }
+uint8_t ImuStream_Stalled(uint32_t timeout_us)
+{
+    uint32_t m=lock(); uint64_t last=imu_diag.last_us;
+    /* Read now after last under the same mask: a DRDY in between two reads
+       must never turn an unsigned subtraction into a false multi-year gap. */
+    uint64_t now=Timebase_NowUs(); unlock(m); return now-last>=timeout_us;
+}
+ImuDiagnostics ImuStream_Snapshot(void)
+{ uint32_t m=lock(); ImuDiagnostics d=imu_diag; unlock(m); return d; }
+uint8_t ImuStream_Peek(ImuRecord *r)
 {
     if (tail==head) return 0;
 #ifndef LAPTUNE_HOST_TEST
     __DMB();
 #endif
-    *r=queue[tail];
+    *r=queue[tail]; return 1;
+}
+void ImuStream_Consume(void)
+{
 #ifndef LAPTUNE_HOST_TEST
     __DMB();
 #endif
-    tail=(tail+1U)%IMU_STREAM_CAPACITY; return 1;
+    tail=(tail+1U)%IMU_STREAM_CAPACITY;
 }
+uint8_t ImuStream_Pop(ImuRecord *r)
+{ if (!ImuStream_Peek(r)) return 0; ImuStream_Consume(); return 1; }
 void ImuStream_Scale(const ImuRecord *r,LSM6DS3_Sample *s)
 {
     *s=(LSM6DS3_Sample){r->raw[0]*LSM6DS3_ACCEL_G_LSB,r->raw[1]*LSM6DS3_ACCEL_G_LSB,r->raw[2]*LSM6DS3_ACCEL_G_LSB,

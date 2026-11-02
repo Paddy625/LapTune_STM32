@@ -1,6 +1,7 @@
 # LapTune_STM32
 Firmware loggera STM32. **P0: [format danych, DRDY i instrukcja wgrania](docs/P0_LOGGER.md)**.
-Wymagane nowe przewody: **INT1 → PA1 (A1), INT2 → PA4 (A2)**.
+**Przegląd P0 i diagnostyka:** [raport zmian](docs/P0_REVIEW_2026-11-02.md).
+Wymagane przewody: **INT1 → PA1 (A1), INT2 → PA4 (A2)**. PPS GPS: **PA0 (A0)**.
 
 IMU **KAmodLSM6DS3** (zastępuje LIS3DH): [połączenia, akcelerometr i żyroskop](docs/IMU_LSM6DS3.md).
 

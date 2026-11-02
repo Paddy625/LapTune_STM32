@@ -1,46 +1,91 @@
 #include "timebase.h"
+#include <string.h>
 #ifndef LAPTUNE_HOST_TEST
 #include "stm32f1xx_hal.h"
+static uint32_t lock(void) { uint32_t m=__get_PRIMASK(); __disable_irq(); return m; }
+static void unlock(uint32_t m) { __set_PRIMASK(m); }
+static uint16_t read_counter(void) { return (uint16_t)TIM2->CNT; }
+static uint8_t overflow_pending(void) { return !!(TIM2->SR&TIM_SR_UIF); }
 #else
-static uint16_t counter;
-static uint8_t pending;
+static uint16_t counter,race_counter;
+static uint8_t pending,race;
+static uint32_t lock(void) { return 0; }
+static void unlock(uint32_t m) { (void)m; }
 void Timebase_TestSet(uint16_t c,uint8_t p) { counter=c; pending=p; }
+void Timebase_TestReadRace(uint16_t c) { race=1; race_counter=c; }
+static uint16_t read_counter(void)
+{
+    uint16_t c=counter;
+    if (race) { race=0; counter=race_counter; pending=1; }
+    return c;
+}
+static uint8_t overflow_pending(void) { return pending; }
 #endif
 static volatile uint64_t upper;
+static volatile PPS_Diagnostics pps;
+TimebaseConfig timebase_config;
+uint32_t Timebase_TimerHz(uint32_t pclk1,uint8_t encoding)
+{ return encoding<4 ? pclk1 : pclk1*2U; }
 void Timebase_Init(void)
 {
-    upper=0;
+    upper=0; memset((void*)&pps,0,sizeof(pps));
 #ifndef LAPTUNE_HOST_TEST
-    __HAL_RCC_TIM2_CLK_ENABLE();
-    uint32_t clock=HAL_RCC_GetPCLK1Freq();
-    if (RCC->CFGR&RCC_CFGR_PPRE1) clock*=2U;
-    TIM2->CR1=0; TIM2->PSC=clock/1000000U-1U; TIM2->ARR=0xFFFFU;
-    TIM2->EGR=TIM_EGR_UG; TIM2->SR=0; TIM2->CNT=0; TIM2->DIER=TIM_DIER_UIE;
+    __HAL_RCC_TIM2_CLK_ENABLE(); __HAL_RCC_GPIOA_CLK_ENABLE();
+    uint32_t pclk=HAL_RCC_GetPCLK1Freq();
+    uint32_t clock=Timebase_TimerHz(pclk,(RCC->CFGR>>8)&7U);
+    timebase_config=(TimebaseConfig){pclk,clock,clock/1000000U-1U,clock/(clock/1000000U),65535};
+    TIM2->CR1=0; TIM2->PSC=timebase_config.prescaler; TIM2->ARR=65535;
+    /* PA0 default TIM2_CH1 mapping, direct TI1 capture, rising edge, no filter. */
+    GPIO_InitTypeDef pin={.Pin=GPIO_PIN_0,.Mode=GPIO_MODE_INPUT,.Pull=GPIO_PULLDOWN};
+    HAL_GPIO_Init(GPIOA,&pin);
+    TIM2->CCMR1=TIM_CCMR1_CC1S_0; TIM2->CCER=TIM_CCER_CC1E;
+    TIM2->EGR=TIM_EGR_UG; TIM2->SR=0; TIM2->CNT=0;
+    TIM2->DIER=TIM_DIER_UIE|TIM_DIER_CC1IE;
     HAL_NVIC_SetPriority(TIM2_IRQn,0,0); HAL_NVIC_EnableIRQ(TIM2_IRQn);
     TIM2->CR1=TIM_CR1_CEN;
 #else
-    counter=0; pending=0;
+    counter=race=pending=0;
+    timebase_config=(TimebaseConfig){32000000,64000000,63,1000000,65535};
 #endif
 }
+static void capture(uint16_t captured,uint16_t now,uint8_t overflow,uint8_t overrun)
+{
+    uint64_t t=upper+captured;
+    if (overflow && captured<=now) t+=65536U;
+    if (overrun) ++pps.overruns;
+    if (pps.pulses) {
+        uint64_t dt=t-pps.last_capture_us;
+        pps.last_period_us=dt>UINT32_MAX ? UINT32_MAX : (uint32_t)dt;
+        if (!overrun && dt>=800000U && dt<=1200000U) {
+            ++pps.periods; pps.sum_period_us+=dt;
+            if (!pps.min_period_us || dt<pps.min_period_us) pps.min_period_us=(uint32_t)dt;
+            if (dt>pps.max_period_us) pps.max_period_us=(uint32_t)dt;
+        } else ++pps.rejected_periods;
+    }
+    ++pps.pulses; pps.last_capture_us=t;
+}
+#ifdef LAPTUNE_HOST_TEST
+void Timebase_TestCapture(uint16_t c,uint16_t n,uint8_t p,uint8_t o) { capture(c,n,p,o); }
+#endif
 void Timebase_OnOverflow(void)
 {
 #ifndef LAPTUNE_HOST_TEST
-    if (TIM2->SR&TIM_SR_UIF) { TIM2->SR=~TIM_SR_UIF; upper+=65536U; }
+    uint32_t flags=TIM2->SR;
+    if (flags&TIM_SR_CC1IF) {
+        uint16_t c=(uint16_t)TIM2->CCR1,n=(uint16_t)TIM2->CNT;
+        capture(c,n,!!(flags&TIM_SR_UIF),!!(flags&TIM_SR_CC1OF));
+    }
+    TIM2->SR=~(flags&(TIM_SR_UIF|TIM_SR_CC1IF|TIM_SR_CC1OF));
+    if (flags&TIM_SR_UIF) upper+=65536U;
 #else
     if (pending) { pending=0; upper+=65536U; }
 #endif
 }
 uint64_t Timebase_NowUs(void)
 {
-#ifndef LAPTUNE_HOST_TEST
-    uint32_t mask=__get_PRIMASK(); __disable_irq();
-    uint64_t value=upper; uint16_t low=(uint16_t)TIM2->CNT;
-    /* An overflow can precede its ISR, including inside a higher-priority ISR. */
-    if (TIM2->SR&TIM_SR_UIF) { value+=65536U; low=(uint16_t)TIM2->CNT; }
-    __set_PRIMASK(mask);
-#else
-    uint64_t value=upper; uint16_t low=counter;
-    if (pending) value+=65536U;
-#endif
-    return value+low;
+    uint32_t m=lock(); uint64_t value=upper; uint16_t low=read_counter();
+    if (overflow_pending()) { value+=65536U; low=read_counter(); }
+    unlock(m); return value+low;
 }
+PPS_Diagnostics Timebase_PPSSnapshot(void)
+{ uint32_t m=lock(); PPS_Diagnostics d=pps; unlock(m); return d; }

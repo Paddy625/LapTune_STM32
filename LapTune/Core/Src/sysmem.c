@@ -77,3 +77,9 @@ void *_sbrk(ptrdiff_t incr)
 
   return (void *)prev_heap_end;
 }
+
+uint32_t MemoryDiag_HeapUsed(void)
+{
+  extern uint8_t _end;
+  return __sbrk_heap_end ? (uint32_t)(__sbrk_heap_end - &_end) : 0;
+}

@@ -25,6 +25,7 @@
 #include "acc.h"
 #include "boot_identity.h"
 #include "timebase.h"
+#include "memory_diag.h"
 #include "imu_stream.h"
 #include "acc_display.h"
 #include "gps.h"
@@ -63,8 +64,8 @@ UART_HandleTypeDef huart3;
 float ax, max_x=0, min_x=0, ay, max_y=0, min_y=0, az, max_z=0, min_z=0;
 float gx, min_gx=0, max_gx=0, gy, min_gy=0, max_gy=0, gz, min_gz=0, max_gz=0;
 static uint8_t sensor_ok, have_sample, sample_valid;
-static uint32_t last_sensor_retry, last_sensor_data;
-static uint8_t app_ready;
+static uint32_t last_sensor_retry;
+static uint8_t app_ready,acquisition_started;
 
 /* USER CODE END PV */
 
@@ -87,15 +88,14 @@ static void ServiceAcquisition(void)
   GPS_Process((uint32_t)(Timebase_NowUs()/1000U));
   LogClock_Update(GPS_GetData());
   ImuStream_Service();
-  for (unsigned n=0; n<32 && SDLogger_CanAccept(); ++n) {
-    ImuRecord record;
-    if (!ImuStream_Pop(&record)) break;
-    last_sensor_data=HAL_GetTick();
-    SDLogger_AppendRaw(&record,LogClock_At((uint32_t)(record.t_us/1000U)));
-    sample_valid=record.flags==0;
-    if (!sample_valid) continue;
+  SDLogger_ConsumeImu();
+}
+void Logger_OnImuRecord(const ImuRecord *record)
+{
+    sample_valid=record->flags==0;
+    if (!sample_valid) return;
     LSM6DS3_Sample sample;
-    ImuStream_Scale(&record,&sample);
+    ImuStream_Scale(record,&sample);
     ax=sample.ax; ay=sample.ay; az=sample.az;
     gx=sample.gx; gy=sample.gy; gz=sample.gz;
     if (!have_sample) {
@@ -116,7 +116,6 @@ static void ServiceAcquisition(void)
     if (gz>max_gz) max_gz=gz;
     if (gz<min_gz) min_gz=gz;
 
-  }
 }
 
 /* Storage may call this while a FatFs write is in progress. IMU acquisition
@@ -150,6 +149,7 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
+  MemoryDiag_Init();
 
   /* USER CODE END 1 */
 
@@ -184,13 +184,10 @@ int main(void)
     Error_Handler();
   }
   if (GPS_Init(&huart3) != HAL_OK) Error_Handler();
-  sensor_ok = LSM6DS3_Init();
-  HAL_Delay(100U); /* Let gyro/accelerometer settle before arming DRDY. */
-  if (sensor_ok) sensor_ok=ImuStream_Start();
-  last_sensor_retry=last_sensor_data=HAL_GetTick();
-  app_ready=1;
+  app_ready=1; /* GPS RX/configuration can be serviced during initial SD setup. */
   SD_SPI_Bind(&hspi1);
-  SDLogger_Start();
+  SDLogger_Start(); /* Prepare and sync the file before arming acquisition. */
+  last_sensor_retry=HAL_GetTick()-1000U;
 
   /* USER CODE END 2 */
 
@@ -203,15 +200,16 @@ int main(void)
     /* USER CODE BEGIN 3 */
     ServiceAcquisition();
     uint32_t now=HAL_GetTick();
-    if (sensor_ok && (uint32_t)(now-last_sensor_data)>=1000U) {
+    if (sensor_ok && (uint32_t)(now-last_sensor_retry)>=1000U &&
+        ImuStream_Stalled(1000000U)) {
       ImuStream_Stop(); sensor_ok=0;
     }
-    if (!sensor_ok && (uint32_t)(now-last_sensor_retry)>=1000U) {
+    if (!sensor_ok && (acquisition_started || SDLogger_Ready()) &&
+        (uint32_t)(now-last_sensor_retry)>=1000U) {
       ImuStream_Stop();
-      sensor_ok=LSM6DS3_Init();
-      HAL_Delay(100U);
-      if (sensor_ok) sensor_ok=ImuStream_Start();
-      last_sensor_retry=last_sensor_data=HAL_GetTick();
+      sensor_ok=SDLogger_StartAcquisition(acquisition_started);
+      if (sensor_ok) acquisition_started=1;
+      last_sensor_retry=HAL_GetTick();
     }
     SDLogger_Process(HAL_GetTick());
     const IMU_DisplayData readings = {
@@ -460,6 +458,9 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *uart)
 {
   GPS_OnRxComplete(uart);
 }
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *uart)
+{ GPS_OnTxComplete(uart); }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *uart)
 {
