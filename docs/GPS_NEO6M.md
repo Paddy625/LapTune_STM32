@@ -26,12 +26,13 @@ P0 odczytuje MON-VER oraz ustawia i sprawdza CFG-MSG/CFG-RATE:
 | NAV-POSLLH | 5 Hz | lon/lat, wysokość MSL |
 | NAV-VELNED | 5 Hz | poziome gSpeed |
 | NAV-SOL | 5 Hz | rodzaj fixa, gpsFixOK, weekSet, TOWSet, satelity |
-| NAV-TIMEUTC | 1 Hz | pomocnicze data/czas UTC |
+| NAV-TIMEUTC | 1 Hz | data/czas UTC do modelu PPS |
+| TIM-TP | 1 Hz | oznaczenie następnego impulsu PPS |
 | GGA/GLL/GSA/GSV/RMC/VTG | wyłączone | unikanie duplikatów i mieszanego cache NMEA |
 
 CFG-RATE: measRate=200 ms, navRate=1, timeRef=GPS. Strumień nominalny:
-(36+44+60) × 5 + 28 = **728 B/s**, czyli 7280 bit/s w 8N1,
-około 19% UART 38400. Pozostaje zapas na odpowiedzi konfiguracyjne.
+(36+44+60) × 5 + 28 + 24 = **752 B/s**, czyli 7520 bit/s w 8N1,
+około 20% UART 38400. Pozostaje zapas na odpowiedzi konfiguracyjne.
 Dodatkowe komunikaty wcześniej włączone innym narzędziem nie są globalnie
 wyłączane; nadmiar ujawni się jako przepełnienie bufora.
 
@@ -44,7 +45,7 @@ USART3 nie korzysta tutaj z DMA; IMU ma osobne DMA SPI2.
 ## Spójność i jednostki
 
 Trzy komunikaty nawigacyjne są składane według identycznego iTOW. Deadline:
-80 ms od pierwszego fragmentu. Wymagane POSLLH i SOL z poprawnym fixem
+180 ms od pierwszego fragmentu. Wymagane POSLLH i SOL z poprawnym fixem
 2D/3D i ważnym czasem tygodnia. Pozycja 2D nie daje wysokości; brak VELNED
 nie daje prędkości. Brakujące pola są puste. Późny fragment nie poprawia
 opublikowanej epoki. Brak świeżej poprawnej pozycji przez **800 ms**
@@ -56,13 +57,14 @@ mają oddzielne liczniki. Brak komunikatów przez 3 s oznacza `GPS NO DATA`.
 - Prędkość: `gSpeed × 0,036 km/h`, z cm/s, bez różnicowania pozycji.
 - Data/czas: UTC, uwzględnione ważności i znak nano; brak stałej poprawki GPS–UTC.
 
-Widok TFT zachowuje układ i sposób odświeżania co 200 ms. Dane pochodzą teraz
+Widok TFT zachowuje układ i odświeżanie co 200 ms, rysując cały obszar z jednej migawki. Dane pochodzą teraz
 z jednej epoki UBX. S oznacza satelity z NAV-SOL, ALT oznacza MSL.
 `GPS NO FIX` to strumień bez poprawnego rozwiązania; `GPS NO DATA` to brak
 świeżej komunikacji. Diagnostyka konfiguracji nadal jest pokazywana na TFT.
 
-`T_IMU_US`, GPS_STATE, GPS_FIX_ID, GPS_ITOW_MS oraz ograniczenie czasów odbioru
-opisano w [P0_LOGGER.md](P0_LOGGER.md). Jest sprzętowe przechwytywanie PPS, ale nie ma jeszcze zweryfikowanego
-mapowania impuls–tydzień/iTOW ani skorygowania latencji GNSS. Model dynamiki, oszczędzanie energii i static
-hold nie są w P0 zmieniane ani uznawane za zweryfikowane. Są do osobnej
-weryfikacji na konkretnym firmware NEO-6 podczas kolejnego etapu.
+`T_IMU_US`, GPS_STATE i identyfikatory opisano w [P0_LOGGER.md](P0_LOGGER.md).
+**PPS na PA0 jest już używane do mapowania czasu pomiaru GPS i UTC próbek**:
+[warunki lock, konfiguracja i diagnostyka](GPS_PPS.md). Błąd opcjonalnego
+CFG-TP/TIM-TP nie blokuje nawigacji 5 Hz. Odbiornik nie jest kalibrowany
+na podstawie ODR IMU. Model dynamiki, oszczędzanie energii i static hold
+nie są zmieniane; wymagają osobnej weryfikacji na konkretnym odbiorniku.

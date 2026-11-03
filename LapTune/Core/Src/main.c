@@ -66,6 +66,7 @@ float gx, min_gx=0, max_gx=0, gy, min_gy=0, max_gy=0, gz, min_gz=0, max_gz=0;
 static uint8_t sensor_ok, have_sample, sample_valid;
 static uint32_t last_sensor_retry;
 static uint8_t app_ready,acquisition_started;
+static uint32_t last_ui_nr;
 
 /* USER CODE END PV */
 
@@ -77,6 +78,7 @@ static void MX_USART3_UART_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_SPI2_Init(void);
 /* USER CODE BEGIN PFP */
+void Logger_OnImuRecord(const ImuRecord *record);
 
 /* USER CODE END PFP */
 
@@ -86,35 +88,42 @@ static void ServiceAcquisition(void)
 {
   if (!app_ready) return;
   GPS_Process((uint32_t)(Timebase_NowUs()/1000U));
-  LogClock_Update(GPS_GetData());
   ImuStream_Service();
+  ImuRecord latest;
+  if (ImuStream_Latest(&latest) && latest.nr!=last_ui_nr) Logger_OnImuRecord(&latest);
   SDLogger_ConsumeImu();
 }
 void Logger_OnImuRecord(const ImuRecord *record)
 {
-    sample_valid=record->flags==0;
-    if (!sample_valid) return;
+    if (record->flags) {
+      if (record->nr>=last_ui_nr) { last_ui_nr=record->nr; sample_valid=0; }
+      return;
+    }
     LSM6DS3_Sample sample;
     ImuStream_Scale(record,&sample);
-    ax=sample.ax; ay=sample.ay; az=sample.az;
-    gx=sample.gx; gy=sample.gy; gz=sample.gz;
+    /* Old buffered samples update extrema without moving the live values backwards. */
     if (!have_sample) {
-      min_x=max_x=ax; min_y=max_y=ay; min_z=max_z=az;
-      min_gx=max_gx=gx; min_gy=max_gy=gy; min_gz=max_gz=gz;
+      min_x=max_x=sample.ax; min_y=max_y=sample.ay; min_z=max_z=sample.az;
+      min_gx=max_gx=sample.gx; min_gy=max_gy=sample.gy; min_gz=max_gz=sample.gz;
       have_sample=1;
     }
-    if (ax>max_x) max_x=ax;
-    if (ax<min_x) min_x=ax;
-    if (ay>max_y) max_y=ay;
-    if (ay<min_y) min_y=ay;
-    if (az>max_z) max_z=az;
-    if (az<min_z) min_z=az;
-    if (gx>max_gx) max_gx=gx;
-    if (gx<min_gx) min_gx=gx;
-    if (gy>max_gy) max_gy=gy;
-    if (gy<min_gy) min_gy=gy;
-    if (gz>max_gz) max_gz=gz;
-    if (gz<min_gz) min_gz=gz;
+    if (sample.ax>max_x) max_x=sample.ax;
+    if (sample.ax<min_x) min_x=sample.ax;
+    if (sample.ay>max_y) max_y=sample.ay;
+    if (sample.ay<min_y) min_y=sample.ay;
+    if (sample.az>max_z) max_z=sample.az;
+    if (sample.az<min_z) min_z=sample.az;
+    if (sample.gx>max_gx) max_gx=sample.gx;
+    if (sample.gx<min_gx) min_gx=sample.gx;
+    if (sample.gy>max_gy) max_gy=sample.gy;
+    if (sample.gy<min_gy) min_gy=sample.gy;
+    if (sample.gz>max_gz) max_gz=sample.gz;
+    if (sample.gz<min_gz) min_gz=sample.gz;
+    if (record->nr>=last_ui_nr) {
+      last_ui_nr=record->nr; sample_valid=1;
+      ax=sample.ax; ay=sample.ay; az=sample.az;
+      gx=sample.gx; gy=sample.gy; gz=sample.gz;
+    }
 
 }
 
@@ -124,7 +133,6 @@ void SD_SPI_Service(void)
 {
   if (!app_ready) return;
   GPS_Process((uint32_t)(Timebase_NowUs()/1000U));
-  LogClock_Update(GPS_GetData());
 }
 
 static HAL_StatusTypeDef ShowLogState(void)

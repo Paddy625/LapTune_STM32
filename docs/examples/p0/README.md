@@ -6,7 +6,7 @@ a dump rejestrów jest zerowy, ponieważ test SD nie uruchamia fizycznego IMU.
 `imu_configuration_verified: false` jest tutaj oczekiwane. SHA identyfikuje
 bazę testowanego kodu, a firmware_dirty sygnalizuje zmiany w tej roboczej
 wersji. Dane pamięci/PPS pochodzą ze stubów hosta i wynoszą 0; nie opisują
-rzeczywistego stanu Nucleo. Aktualny format ma 36 kolumn i format_version=3.
+rzeczywistego stanu Nucleo. Aktualny format ma 36 kolumn i format_version=4.
 Przy nieważnej pozycji znane GPS_FIX_ID, GPS_ITOW_MS i GPS_T_RX_US pozostają
 wartościami diagnostycznymi. TIME_SYNC_STATE=0, czas pomiaru GPS jest pusty.
 

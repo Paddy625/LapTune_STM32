@@ -16,6 +16,7 @@ typedef struct {
     uint32_t baud;
     uint16_t measurement_ms,nav_rate,time_ref;
     uint8_t message_id,attempts;
+    uint8_t pps_state,pps_error; /* pending=0, verified=1, unavailable/error=2 */
 } GPS_ConfigStatus;
 
 HAL_StatusTypeDef GPS_Init(UART_HandleTypeDef *uart);

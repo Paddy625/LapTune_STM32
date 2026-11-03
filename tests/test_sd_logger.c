@@ -1,6 +1,7 @@
 #include "sd_logger.h"
 #include "sd_spi.h"
 #include "gps.h"
+#include "gps_time.h"
 #include "gps_fixtures.h"
 #include "ff.h"
 #include "diskio.h"
@@ -107,7 +108,7 @@ static void append(uint32_t nr) { ImuRecord r=record(nr,mono); append_raw(&r,(Lo
 static void stop(void)
 {
     SDLogger_RequestStop();
-    for (unsigned i=0;i<20 && sd_log_state==LOG_RECORDING;++i) SDLogger_Process(tick);
+    for (unsigned i=0;i<200 && sd_log_state==LOG_RECORDING;++i) { SDLogger_ConsumeImu(); SDLogger_Process(tick); advance(10); }
     assert(sd_log_state==LOG_STOPPED);
 }
 static void nav(uint32_t itow,uint64_t us,unsigned parts,unsigned type)
@@ -126,18 +127,18 @@ static void test_contract(void)
     ImuRecord r=record(3,t); append_raw(&r,utc);
     r=record(4,t+9615); append_raw(&r,utc);
     nav(1200,t+200000,7,3); r=record(5,t+200000); append_raw(&r,utc);
-    nav(1400,t+400000,5,2); GPS_Epoch_Service(&gps_data,t+480000);
-    r=record(6,t+480000); append_raw(&r,utc);
-    r=record(7,t+1280000); r.flags=IMU_ERR_SPI; append_raw(&r,(LogTime){0}); stop();
+    nav(1400,t+400000,5,2); GPS_Epoch_Service(&gps_data,t+580000);
+    r=record(6,t+580000); append_raw(&r,utc);
+    r=record(7,t+1380000); r.flags=IMU_ERR_SPI; append_raw(&r,(LogTime){0}); stop();
     assert(sd_log_written==6 && !sd_log_dropped && sd_max_pause_us);
     char *text=read_log("LOG0001.TXT",6);
     assert(strstr(text,"3;2026-11-01;12:13:14.123;0.999424;-0.999424;0.000488;70.000000;-70.000000;0.070000;52.1234567;21.5678901;44.424;123.456;7200000001;N;1;1000;1;0;7199999926;7200000001;"));
     assert(strstr(text,"7200009616;R;1;1000;"));
     assert(strstr(text,"7200200001;N;2;1200;"));
-    assert(strstr(text,";52.1234567;21.5678901;;;7200480001;N;3;1400;"));
-    assert(strstr(text,"7;;;;;;;;;;;;;7201280001;I;3;1400;0;1;"));
+    assert(strstr(text,";52.1234567;21.5678901;;;7200580001;N;3;1400;"));
+    assert(strstr(text,"7;;;;;;;;;;;;;7201380001;I;3;1400;0;1;"));
     char *json=read_file("SESSION.json");
-    assert(strstr(json,"\"format_version\": 3") && strstr(json,"test\\\"firmware\\\\7.03"));
+    assert(strstr(json,"\"format_version\": 4") && strstr(json,"test\\\"firmware\\\\7.03"));
     const char *export_dir=getenv("P0_ARTIFACT_DIR");
     if (export_dir) {
         char path[512]; snprintf(path,sizeof(path),"%s/LOG0001.TXT",export_dir);
@@ -250,10 +251,43 @@ static void test_full_and_30_minutes(void)
     assert(sd_log_state==LOG_FULL); SDLogger_Process(tick); advance(SD_LOG_RETRY_INTERVAL_MS); SDLogger_Process(tick);
     assert(sd_log_state==LOG_FULL);
 }
+static void test_pps_columns(void)
+{
+    extern void PPSTest_Clear(void);
+    extern void PPSTest_Capture(uint64_t us);
+    fresh_card(0); SDLogger_Start(); PPSTest_Clear(); PPSTest_Capture(1000000);
+    for (unsigned sec=2;sec<=4;++sec) {
+        uint8_t tp[16]={0}; put32(tp,sec*1000); tp[12]=2400&255; tp[13]=2400>>8;
+        GPS_Time_PulseMessage(tp,16,(sec-1)*1000000ULL+110000);
+        GPS_Time_Navigation(2400,sec*1000-200,sec*1000000ULL-100000);
+        PPSTest_Capture(sec*1000000ULL); GPS_Time_Service(sec*1000000ULL);
+    }
+    assert(GPS_Time_Diagnostics().state==1);
+    uint8_t p[28],v[36],s[52],utc[20]={0}; nav_payloads(4200,p,v,s);
+    s[8]=2400&255; s[9]=2400>>8;
+    GPS_Epoch_Packet(&gps_data,1,2,p,28,4300000);
+    GPS_Epoch_Packet(&gps_data,1,0x12,v,36,4310000);
+    GPS_Epoch_Packet(&gps_data,1,6,s,52,4320000);
+    put32(utc,4000); utc[12]=2026&255; utc[13]=2026>>8;
+    utc[14]=11; utc[15]=3; utc[16]=12; utc[19]=7;
+    GPS_Epoch_Packet(&gps_data,1,0x21,utc,20,4330000);
+    mono=4900000; tick=4900;
+    ImuRecord a=record(2,4200000),b=record(3,4209615);
+    assert(append_raw(&a,LogClock_AtUs(a.t_us)) && append_raw(&b,LogClock_AtUs(b.t_us)));
+    stop(); char footer[26]; SDLogger_StatusText(footer); assert(!strcmp(footer,"SD SAVED S0001"));
+    char *text=read_log("LOG0001.TXT",2);
+    assert(strstr(text,"2;2026-11-03;12:00:00.200;") && strstr(text,"3;2026-11-03;12:00:00.209;"));
+    assert(strstr(text,";N;1;4200;") && strstr(text,";R;1;4200;"));
+    char *times=strstr(text,";4320000;4200000;1\r\n");
+    assert(times && strstr(times+1,";4320000;4200000;1\r\n")); free(text);
+    char *json=read_file("SESSION.json");
+    assert(strstr(json,"\"time_sync_state\": 1") && strstr(json,"\"pps_model_period_ticks\": 1000000"));
+    free(json); PPSTest_Clear();
+}
 int main(void)
 {
     image=malloc(SECTORS*512U); assert(image);
-    test_contract(); test_metadata_boundaries(); test_sync_not_retroactive(); test_integer_limits(); test_rotation_and_pause(); test_retry_and_card_change(); test_overload_and_failures(); test_full_and_30_minutes();
+    test_contract(); test_pps_columns(); test_metadata_boundaries(); test_sync_not_retroactive(); test_integer_limits(); test_rotation_and_pause(); test_retry_and_card_change(); test_overload_and_failures(); test_full_and_30_minutes();
     assert(f_mount(NULL,"",0)==FR_OK); free(image);
     puts("PASS SD/FatFs: 36-column contract, exact uint64/scales, GPS N/R/I, JSON/LFN, session separation, rotation/retry/removal/full/overload, 30 virtual minutes");
     return 0;

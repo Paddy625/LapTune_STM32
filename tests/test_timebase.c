@@ -29,6 +29,11 @@ int main(void)
     }
     PPS_Diagnostics pps=Timebase_PPSSnapshot();
     assert(pps.pulses==10 && pps.periods==9 && pps.sum_period_us/pps.periods==1004700);
+    PPS_Capture pulse;
+    assert(Timebase_PPSGet(10,&pulse) && pulse.t_us==1000ULL+9*1004700ULL);
+    assert(!Timebase_PPSGet(6,&pulse));
+    assert(Timebase_PPSBefore(1000ULL+8*1004700ULL+100000,&pulse) && pulse.seq==9);
+    assert(!Timebase_PPSBefore(1,&pulse));
     Timebase_TestCapture(4,5,1,1); assert(Timebase_PPSSnapshot().overruns==1);
     puts("PASS timebase: >2 virtual hours, every overflow, pending IRQ, 32-bit boundary");
 }

@@ -23,12 +23,13 @@ static uint8_t overflow_pending(void) { return pending; }
 #endif
 static volatile uint64_t upper;
 static volatile PPS_Diagnostics pps;
+static PPS_Capture pulses[4];
 TimebaseConfig timebase_config;
 uint32_t Timebase_TimerHz(uint32_t pclk1,uint8_t encoding)
 { return encoding<4 ? pclk1 : pclk1*2U; }
 void Timebase_Init(void)
 {
-    upper=0; memset((void*)&pps,0,sizeof(pps));
+    upper=0; memset((void*)&pps,0,sizeof(pps)); memset(pulses,0,sizeof(pulses));
 #ifndef LAPTUNE_HOST_TEST
     __HAL_RCC_TIM2_CLK_ENABLE(); __HAL_RCC_GPIOA_CLK_ENABLE();
     uint32_t pclk=HAL_RCC_GetPCLK1Freq();
@@ -63,6 +64,7 @@ static void capture(uint16_t captured,uint16_t now,uint8_t overflow,uint8_t over
         } else ++pps.rejected_periods;
     }
     ++pps.pulses; pps.last_capture_us=t;
+    pulses[(pps.pulses-1U)%4U]=(PPS_Capture){t,pps.pulses,overrun};
 }
 #ifdef LAPTUNE_HOST_TEST
 void Timebase_TestCapture(uint16_t c,uint16_t n,uint8_t p,uint8_t o) { capture(c,n,p,o); }
@@ -89,3 +91,18 @@ uint64_t Timebase_NowUs(void)
 }
 PPS_Diagnostics Timebase_PPSSnapshot(void)
 { uint32_t m=lock(); PPS_Diagnostics d=pps; unlock(m); return d; }
+
+uint8_t Timebase_PPSBefore(uint64_t at,PPS_Capture *out)
+{
+    uint32_t m=lock(); uint8_t found=0;
+    for (unsigned i=0;i<4;++i) {
+        const PPS_Capture *p=&pulses[i];
+        if (p->seq && p->t_us<=at && (!found || p->t_us>out->t_us)) { *out=*p; found=1; }
+    }
+    unlock(m); return found;
+}
+uint8_t Timebase_PPSGet(uint32_t seq,PPS_Capture *out)
+{
+    uint32_t m=lock(); *out=pulses[(seq-1U)%4U]; uint8_t found=seq && out->seq==seq;
+    unlock(m); return found;
+}

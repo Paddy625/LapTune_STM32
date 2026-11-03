@@ -5,6 +5,6 @@ typedef struct {
     uint16_t year, millisecond;
     uint8_t month, day, hour, minute, second, valid;
 } LogTime;
-void LogClock_Update(const GPS_Data *data);
-LogTime LogClock_At(uint32_t sample_ms);
+LogTime LogClock_AtUs(uint64_t sample_us);
+LogTime LogClock_ShiftUs(LogTime base,int64_t elapsed_us);
 #endif

@@ -15,6 +15,7 @@ typedef struct {
     uint8_t month, day, hour, minute, second;
     uint8_t satellites, fix_quality;
     uint8_t connected, position_valid, altitude_valid, datetime_valid, speed_valid;
+    uint8_t receiver_fix_valid,time_sync_state;
     uint32_t sentence_ms, position_ms, altitude_ms, datetime_ms, speed_ms;
 } GPS_Data;
 

@@ -26,6 +26,8 @@ void ImuStream_OnComplete(void);
 void ImuStream_OnError(void);
 uint8_t ImuStream_Pop(ImuRecord *record);
 uint8_t ImuStream_Peek(ImuRecord *record);
+uint8_t ImuStream_PeekNext(ImuRecord *record);
+uint8_t ImuStream_Latest(ImuRecord *record);
 void ImuStream_Consume(void);
 uint16_t ImuStream_Count(void);
 uint8_t ImuStream_Stalled(uint32_t timeout_us);

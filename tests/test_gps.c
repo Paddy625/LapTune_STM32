@@ -41,7 +41,8 @@ int main(void)
     GPS_Fix f; GPS_Epoch_ForSample(100000,&f);
     assert(f.position_valid && f.published_us==100000 && GPS_GetData()->position_valid);
     now=700000; epoch(1200,1); GPS_Process(700); assert(gps_diag.checksum_errors==1);
-    now=781000; GPS_Process(781); assert(!GPS_GetData()->position_valid && gps_diag.incomplete==1);
+    now=881000; GPS_Process(881);
+    assert(GPS_GetData()->position_valid && gps_diag.incomplete==1); /* One incomplete epoch does not erase fresh data. */
     now=900000; epoch(1400,0); GPS_Process(900); assert(GPS_GetData()->position_valid);
     GPS_OnError(&uart); GPS_Process(901); assert(gps_diag.uart_errors==2 && !GPS_GetData()->position_valid);
     now=1100000; epoch(100,0); GPS_Process(1100); assert(GPS_GetData()->position_valid);

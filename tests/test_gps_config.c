@@ -7,10 +7,11 @@ static UART_HandleTypeDef uart;
 static uint8_t *target;
 static uint32_t tick,receiver_baud,last_nav;
 static uint16_t measurement,nav_rate,time_ref;
-static uint8_t message_rates[2][256];
+static uint8_t message_rates[3][256];
 uint64_t Timebase_NowUs(void) { return (uint64_t)tick*1000U; }
 static int powered,rx_connected,corrupt_reply,nak,nak_port,ignore_port,ignore_message,ignore_rate,fail_tx,fail_init,short_reply;
-static int drop_ack;
+static int drop_ack,unsupported_pps;
+static uint8_t pulse_configuration[20];
 static unsigned transmissions,port_sets,rate_polls;
 uint32_t HAL_GetTick(void) { return tick; }
 HAL_StatusTypeDef HAL_UART_AbortTransmit(UART_HandleTypeDef *u) { assert(u==&uart); return HAL_OK; }
@@ -85,8 +86,8 @@ HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *handle,const uint8_t 
         }
         break;
     case 1:
-        assert(payload[0]==0xF0 || payload[0]==1);
-        unsigned cls=payload[0]==1;
+        assert(payload[0]==0xF0 || payload[0]==1 || payload[0]==0x0D);
+        unsigned cls=payload[0]==0xF0 ? 0 : (payload[0]==1 ? 1 : 2);
         if (size==3) { if (!ignore_message) message_rates[cls][payload[1]]=payload[2]; ack(1); }
         else {
             assert(size==2);
@@ -94,6 +95,11 @@ HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *handle,const uint8_t 
             if (short_reply) { response[2]=response[3]; reply(6,1,response,3); }
             else reply(6,1,response,sizeof(response));
         }
+        break;
+    case 7:
+        if (unsupported_pps) { const uint8_t n[]={6,7}; reply(5,0,n,2); break; }
+        if (!size) reply(6,7,pulse_configuration,20);
+        else { assert(size==20); memcpy(pulse_configuration,payload,20); ack(7); }
         break;
     case 8:
         if (size==6) {
@@ -131,6 +137,7 @@ static void reset(uint32_t baud,uint32_t start)
 {
     tick=start; receiver_baud=baud; last_nav=tick; measurement=1000; nav_rate=time_ref=1;
     memset(message_rates,0,sizeof(message_rates)); for (unsigned i=0;i<=5;++i) message_rates[0][i]=1;
+    memset(pulse_configuration,0,20); pulse_configuration[12]=47; unsupported_pps=0;
     uart.ErrorCode=0; drop_ack=0; powered=rx_connected=1; corrupt_reply=nak=nak_port=ignore_port=ignore_message=ignore_rate=fail_tx=fail_init=short_reply=0;
     transmissions=port_sets=rate_polls=0; target=NULL; uart.Init.BaudRate=GPS_BOOT_BAUD;
     assert(GPS_Init(&uart)==HAL_OK);
@@ -161,6 +168,7 @@ int main(void)
             last=GPS_GetData()->position_ms; ++updates;
         }
     }
+    assert(GPS_GetConfig()->pps_state==1 && message_rates[2][1]==1 && pulse_configuration[9]==1 && pulse_configuration[12]==47);
     assert(updates>=5 && GPS_GetData()->altitude_valid && GPS_GetData()->altitude_mm==545400);
     uint32_t runtime=tick; uart.ErrorCode=HAL_UART_ERROR_FE|HAL_UART_ERROR_ORE;
     GPS_OnError(&uart); step();
@@ -216,5 +224,8 @@ int main(void)
     powered=0; uint32_t outage=tick; while ((uint32_t)(tick-outage)<3500U) step();
     powered=1; receiver_baud=GPS_BOOT_BAUD; until(GPS_CONFIG_READY,6000);
     assert(gps_diag.uart_errors==13 && gps_diag.uart_first_us==first_error && gps_diag.uart_last_us==last_error);
+    reset(GPS_BOOT_BAUD,0); unsupported_pps=1; until(GPS_CONFIG_READY,3000);
+    for (unsigned n=0;n<200;++n) step();
+    assert(GPS_GetConfig()->state==GPS_CONFIG_READY && GPS_GetConfig()->pps_state==2 && GPS_GetData()->position_valid);
     puts("PASS GPS config: UBX checksums/readback, 5Hz/38400, message rates, MCU/receiver restarts, missing RX, NAK, verification, UART faults and wrap");
 }

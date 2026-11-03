@@ -1,5 +1,5 @@
 # LapTune_STM32
-Firmware loggera STM32. **P0: [format danych, DRDY i instrukcja wgrania](docs/P0_LOGGER.md)**.
+Firmware loggera STM32. **Aktualnie 2.1.0: [poprawki GPS, synchronizacja PPS i uproszczenia](docs/GPS_PPS.md)**. **P0: [format danych, DRDY i instrukcja wgrania](docs/P0_LOGGER.md)**.
 **Przegląd P0 i diagnostyka:** [raport zmian](docs/P0_REVIEW_2026-11-02.md).
 Wymagane przewody: **INT1 → PA1 (A1), INT2 → PA4 (A2)**. PPS GPS: **PA0 (A0)**.
 

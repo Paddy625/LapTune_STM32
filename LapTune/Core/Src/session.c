@@ -2,6 +2,7 @@
 #include "boot_identity.h"
 #include "sd_logger.h"
 #include "gps.h"
+#include "gps_time.h"
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
@@ -44,6 +45,7 @@ FRESULT Session_Write(const char *dir)
     /* Freeze all counters before storage hooks can process more UART packets. */
     ImuDiagnostics imu=ImuStream_Snapshot(); GPS_Diagnostics gps=GPS_DiagnosticsSnapshot();
     SDLogger_Diagnostics sd=sd_diag; PPS_Diagnostics pps=Timebase_PPSSnapshot();
+    GPS_TimeDiagnostics sync=GPS_Time_Diagnostics();
     uint64_t snapshot=Timebase_NowUs(); GPS_ConfigStatus config=*GPS_GetConfig();
     char path[96],backup[96]; FIL f;
     (void)snprintf(path,sizeof(path),"%s/SESSION.new",dir);
@@ -52,7 +54,7 @@ FRESULT Session_Write(const char *dir)
     if (r!=FR_OK) return r;
 #define WRITE(...) do { if (r==FR_OK) r=print(&f,__VA_ARGS__); } while (0)
 #define STR(k,v) do { if (r==FR_OK) r=string(&f,k,v); } while (0)
-    WRITE("{\n  \"format_version\": 3,\n");
+    WRITE("{\n  \"format_version\": 4,\n");
     WRITE("  \"firmware_dirty\": %s,\n",FIRMWARE_DIRTY ? "true" : "false");
     STR("firmware_version",LAPTUNE_FIRMWARE_VERSION); STR("firmware_commit",FIRMWARE_COMMIT);
     STR("boot_id",dir); STR("mcu","STM32F103RB"); STR("imu","LSM6DS3");
@@ -60,12 +62,12 @@ FRESULT Session_Write(const char *dir)
     STR("gps_software",GPS_SoftwareVersion()); STR("gps_hardware",GPS_HardwareVersion());
     STR("time_source","TIM2 16-bit + overflow extension, nominal 1 MHz HSI PLL");
     STR("imu_timestamp","later ACC/GYRO DRDY IRQ; no bus/read/write timestamp reconstruction");
-    STR("gps_row_time","last required UBX byte or assembly deadline; NOT GNSS measurement time");
-    STR("utc","UTC, UART arrival interpolated, auxiliary only; no PPS or holdover guarantee");
+    STR("gps_row_time","PPS-mapped GPS epoch assigned to nearest buffered IMU row; RX kept separately");
+    STR("utc","UTC from valid NAV-TIMEUTC and PPS affine map; empty in logs before lock");
     STR("axis_frame","sensor PCB XYZ; no vehicle rotation, gravity removal or startup zeroing");
     STR("invalid_imu","six empty vector fields; IMU_FLAGS: SPI=1,FRESH=2,PAIR=4,CLIP=8,TIMEOUT=16");
     STR("gps_states","N=new valid epoch once, R=immutable repetition, I=no valid position");
-    WRITE("  \"time_sync_state\": 0, \"t_imu_unit\": \"us\", \"pps_enabled\": true,\n");
+    WRITE("  \"time_sync_state\": %u, \"t_imu_unit\": \"us\", \"pps_enabled\": true,\n",sync.state);
     WRITE("  \"imu_odr_hz\": 104, \"acc_range_g\": 16, \"gyro_range_dps\": 2000,\n");
     WRITE("  \"acc_g_per_lsb\": 0.000488, \"gyro_dps_per_lsb\": 0.070,\n");
     WRITE("  \"who_am_i\": %u,\n",lsm6ds3_registers[5]);
@@ -74,7 +76,7 @@ FRESULT Session_Write(const char *dir)
     WRITE("],\n");
     WRITE("  \"filters\": \"unchanged sensor defaults plus CTRL1/2/3/4 above; group delay NOT bench validated\",\n");
     WRITE("  \"pair_limit_us\": %u, \"timestamp_accuracy_validated\": false,\n",IMU_PAIR_LIMIT_US);
-    WRITE("  \"gps_timeout_us\": 800000, \"gps_assembly_deadline_us\": 80000, \"gps_nominal_hz\": 5,\n");
+    WRITE("  \"gps_timeout_us\": 800000, \"gps_assembly_deadline_us\": 180000, \"gps_nominal_hz\": 5,\n");
     const GPS_ConfigStatus *c=&config;
     WRITE("  \"gps_uart_baud\": %lu, \"gps_configuration_state\": %u, \"gps_measurement_ms\": %u,\n",(unsigned long)c->baud,(unsigned)c->state,c->measurement_ms);
     WRITE("  \"gps_min_period_ms\": %lu, \"gps_max_period_ms\": %lu, \"gps_history_misses\": %lu,\n",(unsigned long)gps.min_period_ms,(unsigned long)gps.max_period_ms,(unsigned long)gps.history_misses);
@@ -107,7 +109,12 @@ FRESULT Session_Write(const char *dir)
     U64("pps_last_capture_us",pps.last_capture_us);
     WRITE("  \"pps_last_period_ticks\": %lu, \"pps_min_period_ticks\": %lu, \"pps_max_period_ticks\": %lu,\n",(unsigned long)pps.last_period_us,(unsigned long)pps.min_period_us,(unsigned long)pps.max_period_us);
     WRITE("  \"pps_mean_period_ticks\": %lu, \"pps_capture_overruns\": %lu, \"pps_rejected_periods\": %lu,\n",(unsigned long)(pps.periods ? pps.sum_period_us/pps.periods : 0),(unsigned long)pps.overruns,(unsigned long)pps.rejected_periods);
-    STR("pps_semantics","PA0 TIM2_CH1 rising hardware capture; nominal 1 Hz reference; no GPS week/TOW association or clock disciplining");
+    STR("pps_semantics","PA0 rising capture + GPS-referenced TIM-TP next-pulse label; 3 pairs and NAV latency cross-check; MCU timer never stepped");
+    WRITE("  \"pps_configuration_state\": %u, \"pps_configuration_error\": %u,\n",config.pps_state,config.pps_error);
+    WRITE("  \"pps_timtp_packets\": %lu, \"pps_matched\": %lu, \"pps_rejected\": %lu,\n",(unsigned long)sync.timtp_packets,(unsigned long)sync.matched,(unsigned long)sync.rejected);
+    WRITE("  \"pps_locks\": %lu, \"pps_losses\": %lu, \"pps_period_change_ticks\": %lu,\n",(unsigned long)sync.locks,(unsigned long)sync.losses,(unsigned long)sync.period_change_ticks);
+    WRITE("  \"pps_model_period_ticks\": %lu,\n",(unsigned long)sync.period_ticks);
+    WRITE("  \"log_holdback_us\": %u, \"pps_nav_latency_limit_us\": 500000,\n",SD_LOG_HOLDBACK_US);
     U64("gps_uart_first_error_us",gps.uart_first_us); U64("gps_uart_last_error_us",gps.uart_last_us);
     U64("gps_uart_init_first_error_us",gps.uart_phase_first_us[0]); U64("gps_uart_init_last_error_us",gps.uart_phase_last_us[0]);
     U64("gps_uart_run_first_error_us",gps.uart_phase_first_us[1]); U64("gps_uart_run_last_error_us",gps.uart_phase_last_us[1]);

@@ -1,11 +1,11 @@
-# P0 — kontrakt loggera 2.0.1-p0
+# Kontrakt loggera 2.1.0 (P0 + mapowanie PPS)
 
-**Aktualizacja i wyniki przeglądu:** [P0_REVIEW_2026-11-02.md](P0_REVIEW_2026-11-02.md).
+**Aktualne zmiany:** [GPS/PPS 2.1.0](GPS_PPS.md). Historyczny przegląd P0: [P0_REVIEW_2026-11-02.md](P0_REVIEW_2026-11-02.md).
 
 P0 wprowadza niezależny czas IMU, rzeczywiste zdarzenia DRDY, spójne epoki
 UBX, osobne sesje uruchomień i diagnostykę braków. Zachowuje **104 Hz,
 ±16 g, ±2000°/s**, GPS 5 Hz oraz układ TFT. PPS na PA0 jest przechwytywane sprzętowo jako odniesienie skali czasu.
-Mapowanie czasu pomiaru GNSS na MCU pozostaje etapem P1. Parametry czasowe poniżej są ustawieniami
+Czas pomiaru GNSS jest mapowany na MCU przez PPS + TIM-TP. Parametry czasowe poniżej są ustawieniami
 oprogramowania; nie są pomiarem dokładności gotowego urządzenia.
 
 ## Wymagane połączenia
@@ -72,7 +72,7 @@ przydzielane przed ewentualnym odrzuceniem z kolejki. Nie wstawiamy duplikatów.
 Przy braku par przez 1 s następuje ponowna inicjalizacja bez zerowania NR/czasu.
 
 Pierścień surowy ma 255 użytecznych rekordów, około 2,45 s przy 104 Hz.
-Kolejka formatowania ma 16 rekordów. ISR nie wywołuje FatFs ani printf.
+Kolejka formatowania ma 16 rekordów. Próbki czekają 700 ms na historyczne przypisanie GPS; ekran korzysta z bieżącej próbki. ISR nie wywołuje FatFs ani printf.
 SPI1 obsługuje SD/TFT, SPI2 z DMA1 kanał 4/5 obsługuje IMU niezależnie.
 Priorytety: TIM2=0, DRDY=1, DMA/USART3=2, B1=3. Nie jest to nieskończony
 bufor — przeciążenie daje liczniki i brakujące NR.
@@ -100,8 +100,8 @@ NR;DATA;CZAS;ACC_X;ACC_Y;ACC_Z;GYRO_X;GYRO_Y;GYRO_Z;GPS_LAT;GPS_LON;GPS_SPEED_KM
 | GPS_FIX_ID | uint32, identyfikator epoki, stały przy R; przy I zachowany, jeśli odebrana epoka jest znana |
 | GPS_ITOW_MS | oryginalny uint32 iTOW, ms tygodnia GPS; przy I zachowany, jeśli odebrana epoka jest znana |
 | GPS_T_RX_US | rzeczywisty czas ostatniego odebranego fragmentu epoki; przy znanej epoce zachowany także dla I |
-| GPS_T_MEAS_US | pusty do czasu zweryfikowanego mapowania GNSS–MCU |
-| TIME_SYNC_STATE | 0 = brak zweryfikowanego mapowania; samo PPS nie ustawia locked |
+| GPS_T_MEAS_US | czas iTOW przeliczony przez model PPS na MCU; pusty przy stanie 0 |
+| TIME_SYNC_STATE | 0 = brak mapowania tej epoki, 1 = powiązanie PPS + TIM-TP; nie jest sprzętową walidacją dokładności |
 | IMU_VALID | 1 tylko przy braku wszystkich błędów wiersza |
 | IMU_FLAGS | maska bitowa opisana poniżej |
 | T_ACC_US, T_GYRO_US | osobne znaczniki zboczy w tej samej skali MCU |
@@ -109,8 +109,7 @@ NR;DATA;CZAS;ACC_X;ACC_Y;ACC_Z;GYRO_X;GYRO_Y;GYRO_Z;GPS_LAT;GPS_LON;GPS_SPEED_KM
 [Syntetyczne TXT i SESSION.json dla aplikacji desktopowej](examples/p0/README.md).
 
 Wartości wyjściowe są formatowane z liczb całkowitych. Wszystkie pola dodatkowe
-oprócz GPS_STATE są liczbowe. Używaj `dt = ΔT_IMU_US / 1e6`, nie ΔUTC i nie
-stałego 1/104. Brak pomiaru jest pustym polem. ACC pozostaje w osiach czujnika,
+oprócz GPS_STATE są liczbowe. Do integracji używaj różnic rzeczywistych timestampów; `ΔT_IMU_US / 1e6` jest czasem nominalnym, a korektę skali PPS opisano w [GPS_PPS.md](GPS_PPS.md). Nie używaj stałego 1/104. Brak pomiaru jest pustym polem. ACC pozostaje w osiach czujnika,
 bez usuwania grawitacji, normalizacji, obrotu do pojazdu lub autozerowania.
 Precyzja zapisu nie stanowi deklaracji dokładności.
 
@@ -137,32 +136,32 @@ pomiarów, których nigdy nie odczytano. Czas i luki pozostają rzeczywiste.
 
 ## Epoki i czas GPS
 
-POSLLH + VELNED + SOL są składane według iTOW, z deadline 80 ms.
+POSLLH + VELNED + SOL są składane według iTOW, z deadline 180 ms.
 Poprawna pozycja wymaga POSLLH, SOL, gpsFixOK, weekSet/TOWSet i fixa 2D/3D.
 Brak VELNED oznacza pustą prędkość, fix 2D — pustą wysokość.
 Publikacja jest jednokrotna; późny fragment nie zmienia cache ani ID.
 Nowa identyczna pozycja nadal otrzymuje nowy ID i N. Granica tygodnia nie
 resetuje ID. Restart łącza GPS unieważnia cache, lecz nie zeruje numeracji.
 
-Dla próbki IMU wybierana jest ostatnia epoka opublikowana przed jej timestampem,
-z historii 16 epok. Zapobiega to przypisywaniu nowszego GPS do próbek, które
-czekały w RAM na SD. Jeśli historia nie obejmuje próbki, zapis jest I.
+Dla epoki z lock GPS wybierany jest najbliższy historyczny wiersz IMU według
+GPS_T_MEAS_US, dzięki oczekiwaniu próbek 700 ms w istniejącym buforze.
+Historia obejmuje 16 epok. Bez lock wybierana jest ostatnia epoka opublikowana
+przed timestampem próbki; GPS_T_MEAS_US pozostaje puste. Jeśli historia nie
+obejmuje próbki, zapis jest I. Szczegóły: [GPS_PPS.md](GPS_PPS.md).
 Timeout 800 ms pozostawia pozycję, prędkość i wysokość puste; znane ID/iTOW/czas RX
 pozostają diagnostycznie. I ma pierwszeństwo nad obecnością tych liczb. IMU i zegar działają dalej.
 N/R wyznaczane są względem ostatniego ID przyjętego przez f_write, również przez granice plików.
 Po błędzie częściowego zapisu importer powinien dodatkowo deduplikować ID;
 FAT nie daje transakcji obejmującej wiersz i awarię zasilania.
 
-**Ograniczenie P0:** czas publikacji pochodzi z końca odbioru ostatniej potrzebnej
-ramki UBX albo deadline. Nie jest czasem fizycznego pomiaru GPS. P0 nie mapuje
-iTOW na zegar MCU, nie cofa korekt do chwili pomiaru i nie gwarantuje ≤5 ms.
-Samo pole iTOW nie usuwa latencji w obecnym ESKF Windows. PPS i uzgodnienie
-korekt opóźnionych są P1.
+GPS_T_RX_US pozostaje czasem końca odbioru, oddzielnym od GPS_T_MEAS_US.
+Model PPS wymaga zgodności TIM-TP i ważnego NAV-SOL; bez lock nie usuwa
+latencji UART. Nawet z lock pozostają niezmierzone opóźnienia torów IMU/GNSS.
+Nie deklarujemy fizycznej dokładności ≤5 ms na podstawie samego kodu.
 
-DATA/CZAS pochodzą z NAV-TIMEUTC i interpolacji względem czasu odbioru.
-Bez świeżego ważnego UTC przez 3 s są puste; nie deklarujemy holdover.
-UTC może zostać skorygowane przez odbiornik. T_IMU_US pozostaje podstawą
-integracji i nie podlega tym korektom.
+DATA/CZAS próbki pochodzą z NAV-TIMEUTC i modelu PPS, z milisekundami.
+Bez lock są puste; ważność UTC jest ograniczona do okolicy ±3 s kotwicy UTC.
+T_IMU_US pozostaje monotonicznym zegarem MCU; GPS nie przestawia timera.
 
 ## Sesje i wgrywanie
 
@@ -212,7 +211,7 @@ handlerów TIM2/EXTI/DMA. Aktualizacje oprogramowania wykonuj po zatrzymaniu log
 
 ## Weryfikacja i odbiór sprzętowy
 
-Testy hosta (15 programów, ASan + UBSan, ostrzeżenia jako błędy) obejmują:
+Testy hosta (16 programów, ASan + UBSan, ostrzeżenia jako błędy) obejmują:
 ponad 2 h wirtualnego zegara z każdym przepełnieniem, odcięcie programowania
 boot ID na każdym kroku, DMA/parowanie/utratę świeżości/clipping, przepełnienia
 kolejek i luki NR, transport UBX i opóźnione parsowanie, N/R/I, niepełne epoki,

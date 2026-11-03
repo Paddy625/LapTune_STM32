@@ -6,6 +6,9 @@ typedef struct {
     uint64_t last_capture_us,sum_period_us;
     uint32_t pulses,periods,last_period_us,min_period_us,max_period_us,overruns,rejected_periods;
 } PPS_Diagnostics;
+typedef struct { uint64_t t_us; uint32_t seq; uint8_t overrun; } PPS_Capture;
+uint8_t Timebase_PPSBefore(uint64_t at_us,PPS_Capture *capture);
+uint8_t Timebase_PPSGet(uint32_t sequence,PPS_Capture *capture);
 extern TimebaseConfig timebase_config;
 /* Nominal MCU microseconds; never disciplined from assumed ODR or PPS. */
 void Timebase_Init(void);

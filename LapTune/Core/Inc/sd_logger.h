@@ -15,6 +15,7 @@ extern char sd_log_filename[13];
 extern char sd_log_session_dir[64];
 extern volatile uint32_t sd_max_pause_us;
 #define SD_LOG_QUEUE_CAPACITY 16U
+#define SD_LOG_HOLDBACK_US 700000U
 #define SD_LOG_SNAPSHOT_INTERVAL_MS 5000U
 typedef struct {
     uint64_t sd_ready_us,first_written_us,first_written_sample_us,last_drop_us;
@@ -32,6 +33,7 @@ unsigned SDLogger_RecordBytes(void);
 uint8_t SDLogger_StartAcquisition(uint8_t already_started);
 void SDLogger_ConsumeImu(void); /* Single foreground consumer; never called from SD I/O. */
 uint8_t SDLogger_CanAccept(void);
+uint8_t SDLogger_ShouldWait(uint64_t sample_us);
 uint8_t SDLogger_AppendRaw(const ImuRecord *record,LogTime time);
 void SDLogger_Process(uint32_t now);
 void SDLogger_RequestStop(void);

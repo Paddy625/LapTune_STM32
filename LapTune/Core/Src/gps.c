@@ -1,5 +1,6 @@
 #include "gps.h"
 #include "timebase.h"
+#include "gps_time.h"
 #include <stddef.h>
 #include <string.h>
 
@@ -18,14 +19,16 @@ typedef enum { DISCOVER_SEND, DISCOVER_WAIT, PORT_SET, SWITCH_WAIT,
                INFO_SEND,INFO_WAIT,SETTING_SEND, SETTING_DELAY, SETTING_WAIT, CONFIG_DONE, CONFIG_RETRY } Phase;
 static Phase phase;
 static uint32_t phase_ms;
-static uint8_t probe,probes,setting,attempt,port_attempts,setting_ack;
+static uint8_t probe,probes,setting,attempt,port_attempts,setting_ack,pulse_loaded;
 static uint8_t port_config[20];
 /* Disable default NMEA; coherent UBX POSLLH/VELNED/SOL at 5 Hz, UTC at 1 Hz. */
 static const uint8_t classes[]={0xF0,0xF0,0xF0,0xF0,0xF0,0xF0,1,1,1,1};
 static const uint8_t messages[]={1,2,3,5,0,4,2,0x12,6,0x21};
 static const uint8_t rates[]={0,0,0,0,0,0,1,1,1,5};
+enum { NAV_RATE_SETTING=sizeof(messages), PULSE_SETTING, TIMTP_SETTING, ALL_SETTINGS };
 static char sw_version[31]="unknown",hw_version[11]="unknown";
-static struct { uint64_t us; uint16_t end; } boundaries[16];
+static uint64_t boundary_times[16];
+static uint16_t boundary_ends[16];
 static volatile uint8_t boundary_head,boundary_tail,irq_ubx_state;
 static uint16_t irq_length,irq_index;
 static uint64_t packet_us;
@@ -37,6 +40,10 @@ static uint16_t le16(const uint8_t *p) { return (uint16_t)p[0]|((uint16_t)p[1]<<
 static uint32_t le32(const uint8_t *p) { return (uint32_t)le16(p)|((uint32_t)le16(p+2)<<16); }
 static void config_error(GPS_ConfigError reason,uint32_t now)
 {
+    if (setting>=PULSE_SETTING && configuration.state==GPS_CONFIG_READY) {
+        configuration.pps_state=2; configuration.pps_error=reason;
+        phase=CONFIG_DONE; phase_ms=now; return;
+    }
     configuration.state=GPS_CONFIG_ERROR; configuration.error=reason;
     phase=CONFIG_RETRY; phase_ms=now;
 }
@@ -71,7 +78,7 @@ static void discover(void)
     GPS_Epoch_ResetStream(&data,Timebase_NowUs());
     configuration.state=GPS_CONFIG_PENDING; configuration.error=GPS_CFG_OK;
     configuration.measurement_ms=configuration.nav_rate=configuration.time_ref=0;
-    configuration.attempts=0;
+    configuration.attempts=0; configuration.pps_state=configuration.pps_error=pulse_loaded=0;
     probe=(gps_uart->Init.BaudRate==GPS_RUN_BAUD); probes=setting=attempt=port_attempts=0;
     phase=DISCOVER_SEND;
 }
@@ -80,6 +87,8 @@ static void packet_received(uint32_t now)
     uint64_t us=packet_us;
     GPS_Epoch_Service(&data,us);
     GPS_Epoch_Packet(&data,ubx_class,ubx_id,ubx_payload,ubx_length,us);
+    if (ubx_class==0x0D && ubx_id==1 && configuration.pps_state==1)
+        GPS_Time_PulseMessage(ubx_payload,ubx_length,us);
     if (ubx_class==0x0A && ubx_id==4 && ubx_length>=40) {
         memcpy(sw_version,ubx_payload,30); sw_version[30]=0;
         memcpy(hw_version,ubx_payload+30,10); hw_version[10]=0;
@@ -101,18 +110,31 @@ static void packet_received(uint32_t now)
             (le16(port_config+14)&3U)==3U) {
             setting=attempt=0; phase=INFO_SEND;
         } else phase=PORT_SET;
-    } else if (phase==SETTING_WAIT && setting<sizeof(messages) && ubx_id==1 &&
-               (ubx_length==3 || ubx_length==8) && ubx_payload[0]==classes[setting] && ubx_payload[1]==messages[setting]) {
-        uint8_t rate=ubx_payload[ubx_length==8 ? 3 : 2]; /* Receiver UART1/current port. */
-        if (rate==rates[setting] && setting_ack) { ++setting; attempt=0; phase=SETTING_SEND; }
-        else config_error(GPS_CFG_VERIFY,now);
-    } else if (phase==SETTING_WAIT && setting==sizeof(messages) && ubx_id==8 && ubx_length==6) {
-        configuration.measurement_ms=le16(ubx_payload);
-        configuration.nav_rate=le16(ubx_payload+2); configuration.time_ref=le16(ubx_payload+4);
-        if (configuration.measurement_ms==GPS_MEASUREMENT_MS && configuration.nav_rate==1 && configuration.time_ref==1 && setting_ack) {
+    } else if (phase==SETTING_WAIT) {
+        uint8_t message_setting=setting<NAV_RATE_SETTING || setting==TIMTP_SETTING;
+        if (message_setting && ubx_id==1 && (ubx_length==3 || ubx_length==8)) {
+            uint8_t cls=setting<NAV_RATE_SETTING ? classes[setting] : 0x0D;
+            uint8_t id=setting<NAV_RATE_SETTING ? messages[setting] : 1;
+            uint8_t expected=setting<NAV_RATE_SETTING ? rates[setting] : 1;
+            if (ubx_payload[0]!=cls || ubx_payload[1]!=id) return;
+            if (ubx_payload[ubx_length==8 ? 3 : 2]!=expected || !setting_ack) { config_error(GPS_CFG_VERIFY,now); return; }
+        } else if (setting==NAV_RATE_SETTING && ubx_id==8 && ubx_length==6) {
+            configuration.measurement_ms=le16(ubx_payload);
+            configuration.nav_rate=le16(ubx_payload+2); configuration.time_ref=le16(ubx_payload+4);
+            if (configuration.measurement_ms!=GPS_MEASUREMENT_MS || configuration.nav_rate!=1 || configuration.time_ref!=1 || !setting_ack) {
+                config_error(GPS_CFG_VERIFY,now); return;
+            }
             configuration.state=GPS_CONFIG_READY; configuration.error=GPS_CFG_OK;
-            phase=CONFIG_DONE; phase_ms=now;
-        } else config_error(GPS_CFG_VERIFY,now);
+        } else if (setting==PULSE_SETTING && ubx_id==7 && ubx_length==20) {
+            if (!pulse_loaded) {
+                /* Preserve antenna/RF/user delays and undocumented legacy flags. */
+                memcpy(port_config,ubx_payload,20);
+                const uint8_t desired[]={0x40,0x42,0x0F,0,0xA0,0x86,1,0,1,1}; /* 1 Hz, 100 ms, positive, GPS time. */
+                memcpy(port_config,desired,sizeof(desired)); pulse_loaded=1; attempt=0; phase=SETTING_SEND; return;
+            }
+            if (memcmp(port_config,ubx_payload,10) || !setting_ack) { config_error(GPS_CFG_VERIFY,now); return; }
+        } else return;
+        ++setting; attempt=0; phase=SETTING_SEND;
     }
 }
 static void ubx_byte(uint8_t ch,uint32_t now)
@@ -176,17 +198,30 @@ static void configure(uint32_t now)
         }
         break;
     case SETTING_SEND:
-        setting_ack=0;
-        configuration.attempts=++attempt;
-        if (setting<sizeof(messages)) {
-            uint8_t payload[]={classes[setting],messages[setting],rates[setting]};
-            configuration.message_id=1; result=send_ubx(1,payload,sizeof(payload));
-        } else { configuration.message_id=8; result=send_ubx(8,rate,sizeof(rate)); }
+        if (setting==ALL_SETTINGS) {
+            configuration.pps_state=1; configuration.pps_error=GPS_CFG_OK;
+            phase=CONFIG_DONE; phase_ms=now; break;
+        }
+        setting_ack=0; configuration.attempts=++attempt;
+        if (setting<NAV_RATE_SETTING || setting==TIMTP_SETTING) {
+            uint8_t payload[]={setting<NAV_RATE_SETTING ? classes[setting] : 0x0D,
+                setting<NAV_RATE_SETTING ? messages[setting] : 1,
+                setting<NAV_RATE_SETTING ? rates[setting] : 1};
+            configuration.message_id=1; result=send_ubx(1,payload,3);
+        } else if (setting==NAV_RATE_SETTING) {
+            configuration.message_id=8; result=send_ubx(8,rate,sizeof(rate));
+        } else {
+            configuration.message_id=7;
+            result=send_ubx(7,pulse_loaded ? port_config : NULL,pulse_loaded ? 20 : 0);
+            if (!pulse_loaded) { phase=SETTING_WAIT; phase_ms=now; break; }
+        }
         phase=SETTING_DELAY; phase_ms=now; break;
     case SETTING_DELAY:
         if ((uint32_t)(now-phase_ms)>=40U) {
-            if (setting<sizeof(messages)) { uint8_t payload[]={classes[setting],messages[setting]}; result=send_ubx(1,payload,2); }
-            else result=send_ubx(8,NULL,0);
+            if (setting<NAV_RATE_SETTING || setting==TIMTP_SETTING) {
+                uint8_t payload[]={setting<NAV_RATE_SETTING ? classes[setting] : 0x0D,
+                    setting<NAV_RATE_SETTING ? messages[setting] : 1}; result=send_ubx(1,payload,2);
+            } else result=send_ubx(configuration.message_id,NULL,0);
             phase=SETTING_WAIT; phase_ms=now;
         }
         break;
@@ -196,7 +231,7 @@ static void configure(uint32_t now)
         }
         break;
     case CONFIG_DONE:
-        if (!data.connected && (uint32_t)(now-phase_ms)>=GPS_FRESH_MS) discover();
+        if (!data.connected && (uint32_t)(now-data.sentence_ms)>=GPS_FRESH_MS) discover();
         break;
     case INFO_SEND:
         result=send_frame(0x0A,4,NULL,0); phase=INFO_WAIT; phase_ms=now; break;
@@ -245,7 +280,7 @@ void GPS_OnRxComplete(UART_HandleTypeDef *uart)
     default: {
         uint8_t n=(boundary_head+1U)%16U;
         if (n==boundary_tail) overflow=1;
-        else { boundaries[boundary_head].us=Timebase_NowUs(); boundaries[boundary_head].end=head;
+        else { boundary_times[boundary_head]=Timebase_NowUs(); boundary_ends[boundary_head]=head;
 #ifndef LAPTUNE_HOST_TEST
             __DMB();
 #endif
@@ -306,16 +341,24 @@ void GPS_Process(uint32_t now)
     /* Bounded work even if bytes keep arriving during parsing. */
     for (unsigned n = 0; n < RX_CAPACITY && tail != head; ++n) {
         uint8_t ch = queue[tail]; tail = (tail + 1U) % RX_CAPACITY;
-        if (boundary_tail!=boundary_head && boundaries[boundary_tail].end==tail) {
+        if (boundary_tail!=boundary_head && boundary_ends[boundary_tail]==tail) {
 #ifndef LAPTUNE_HOST_TEST
             __DMB();
 #endif
-            packet_us=boundaries[boundary_tail].us; boundary_tail=(boundary_tail+1U)%16U;
+            packet_us=boundary_times[boundary_tail]; boundary_tail=(boundary_tail+1U)%16U;
         }
         if (ubx_state) { ubx_byte(ch,now); continue; }
         if (ch==0xB5) ubx_state=1; /* Ignore NMEA/other noise; UBX is the only source. */
     }
-    GPS_Epoch_Service(&data,Timebase_NowUs());
+    uint64_t current=Timebase_NowUs();
+    GPS_Epoch_Service(&data,current); GPS_Time_Service(current);
+    LogTime utc;
+    if (GPS_Time_UTCAt(current,&utc)) {
+        data.year=utc.year; data.month=utc.month; data.day=utc.day;
+        data.hour=utc.hour; data.minute=utc.minute; data.second=utc.second; data.millisecond=utc.millisecond;
+        data.datetime_ms=(uint32_t)(current/1000U); data.datetime_valid=1;
+    }
+    data.time_sync_state=GPS_Time_Diagnostics().state;
     configure(now);
 }
 

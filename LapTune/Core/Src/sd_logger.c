@@ -16,7 +16,7 @@ static unsigned head,tail,count;
 static uint32_t last_sync,file_started,last_attempt,last_button,last_fix_id;
 static unsigned file_number,rotation_records;
 static uint32_t snapshot_ms,file_last_nr,file_records,file_synced_records;
-static uint64_t file_last_sample_us;
+static uint64_t file_last_sample_us,stop_at_us;
 SDLogger_Diagnostics sd_diag;
 unsigned SDLogger_RecordBytes(void) { return sizeof(queue[0]); }
 static volatile uint8_t stop_requested,resume_requested,automatic_enabled;
@@ -34,7 +34,7 @@ char sd_log_filename[13];
 
 DWORD get_fattime(void)
 {
-    LogTime t=LogClock_At((uint32_t)(Timebase_NowUs()/1000U));
+    LogTime t=LogClock_AtUs(Timebase_NowUs());
     if (!t.valid) return (1U<<21)|(1U<<16); /* 1980-01-01 metadata only. */
     return ((DWORD)(t.year-1980)<<25)|((DWORD)t.month<<21)|((DWORD)t.day<<16)|
            ((DWORD)t.hour<<11)|((DWORD)t.minute<<5)|(t.second/2U);
@@ -81,7 +81,12 @@ void SDLogger_StatusText(char text[26])
     }
     default: break;
     }
-    (void)snprintf(text,26,"%-12s%-12s ",label,sd_log_filename);
+    if (sd_log_state==LOG_RECORDING)
+        (void)snprintf(text,26,"REC S%04lX/%s",
+            (unsigned long)(BootIdentity_Counter()&0xFFFFU),sd_log_filename);
+    else if (sd_log_state==LOG_STOPPED)
+        (void)snprintf(text,26,"SD SAVED S%04lX",(unsigned long)(BootIdentity_Counter()&0xFFFFU));
+    else (void)snprintf(text,26,"%-12s%-12s ",label,sd_log_filename);
 }
 static uint8_t failed(void) { return sd_log_state>=LOG_CARD_ERROR; }
 static void drop_records(unsigned n,uint32_t reason)
@@ -189,7 +194,7 @@ void SDLogger_Start(void)
     connect_card(); if (failed()) cleanup_failure();
     pause_since(start);
 }
-void SDLogger_RequestStop(void) { automatic_enabled=0; resume_requested=0; stop_requested=1; }
+void SDLogger_RequestStop(void) { stop_at_us=Timebase_NowUs(); automatic_enabled=0; resume_requested=0; stop_requested=1; }
 void SDLogger_RequestResume(void) { automatic_enabled=1; resume_requested=1; }
 void SDLogger_Button(void)
 {
@@ -204,17 +209,28 @@ void SDLogger_DataLoss(void)
     if (sd_log_state==LOG_RECORDING) { ++sd_log_dropped; fail(FR_INT_ERR,LOG_DATA_LOSS); }
 }
 uint8_t SDLogger_Ready(void) { return opened && sd_log_state==LOG_RECORDING && automatic_enabled && !stop_requested; }
-uint8_t SDLogger_CanAccept(void) { return !automatic_enabled || (SDLogger_Ready() && count<CAPACITY); }
+uint8_t SDLogger_CanAccept(void)
+{ return (opened && sd_log_state==LOG_RECORDING) ? count<CAPACITY : !automatic_enabled; }
+uint8_t SDLogger_ShouldWait(uint64_t t)
+{
+    if (!automatic_enabled && (sd_log_state!=LOG_RECORDING || t>stop_at_us)) return 0;
+    uint64_t now=Timebase_NowUs(); return now<t || now-t<SD_LOG_HOLDBACK_US;
+}
+static uint8_t stop_has_raw(void)
+{ ImuRecord r; return ImuStream_Peek(&r) && r.t_us<=stop_at_us; }
 uint8_t SDLogger_AppendRaw(const ImuRecord *record,LogTime time)
 {
     acquisition_fault=0;
-    if (!automatic_enabled) { /* An explicit pause, never a not-ready retry. */
+    if (!automatic_enabled && (sd_log_state!=LOG_RECORDING || record->t_us>stop_at_us)) {
         ++sd_log_dropped; sd_diag.last_drop_nr=record->nr; sd_diag.last_drop_reason=5;
         sd_diag.last_drop_us=Timebase_NowUs(); return 1;
     }
-    if (!SDLogger_Ready() || count==CAPACITY) return 0; /* Caller retains ownership. */
+    if (!opened || sd_log_state!=LOG_RECORDING || count==CAPACITY) return 0; /* Caller retains ownership. */
     queue[head].imu=*record; queue[head].time=time;
-    GPS_Epoch_ForSample(record->t_us,&queue[head].gps);
+    ImuRecord next;
+    uint64_t midpoint=record->t_us;
+    if (ImuStream_PeekNext(&next) && next.t_us>=record->t_us) midpoint+=(next.t_us-record->t_us)/2U;
+    GPS_Epoch_ForWindow(record->t_us,midpoint,&queue[head].gps);
     head=(head+1U)%CAPACITY; ++count; sd_diag.queue_depth=count;
     if (count>sd_diag.queue_high_water) sd_diag.queue_high_water=count;
     return 1;
@@ -256,17 +272,18 @@ static unsigned format(char out[512],const struct Record *r,uint32_t prior_fix)
     uint32_t skew=r->imu.acc_minus_gyro_us<0 ? (uint32_t)-(int64_t)r->imu.acc_minus_gyro_us : (uint32_t)r->imu.acc_minus_gyro_us;
     if (r->imu.acc_minus_gyro_us<0) acc=acc>=skew ? acc-skew : 0;
     else gyro=gyro>=skew ? gyro-skew : 0;
-    char t[21],ta[21],tg[21],rx[21]="";
+    char t[21],ta[21],tg[21],rx[21]="",measurement[21]="";
     if (r->gps.epoch_known) decimal64(rx,r->gps.rx_us);
+    if (r->gps.time_sync_state) decimal64(measurement,r->gps.rx_us-r->gps.meas_delay_us);
     decimal64(t,r->imu.t_us); decimal64(ta,acc); decimal64(tg,gyro);
-    return (unsigned)snprintf(out,512,"%lu;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%c;%s;%s;%u;%u;%s;%s;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%s;;0\r\n",
+    return (unsigned)snprintf(out,512,"%lu;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%c;%s;%s;%u;%u;%s;%s;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%s;%s;%u\r\n",
         (unsigned long)r->imu.nr,date,time,value[0],value[1],value[2],value[3],value[4],value[5],
         navigation[0],navigation[1],navigation[2],navigation[3],t,!r->gps.position_valid ? 'I' : (r->gps.fix_id==prior_fix ? 'R' : 'N'),id,itow,
         !r->imu.flags,r->imu.flags,ta,tg,
         (unsigned long)imu_diag.dropped,(unsigned long)imu_diag.spi_errors,(unsigned long)imu_diag.pair_errors,
         (unsigned long)gps_diag.uart_errors,(unsigned long)gps_diag.checksum_errors,(unsigned long)gps_diag.incomplete,
         (unsigned long)gps_diag.late,(unsigned long)sd_log_dropped,(unsigned long)sd_max_pause_us,(unsigned long)imu_diag.missed_drdy,
-        (unsigned long)gps_diag.rx_overflows,(unsigned long)gps_diag.invalid_fixes,rx);
+        (unsigned long)gps_diag.rx_overflows,(unsigned long)gps_diag.invalid_fixes,rx,measurement,r->gps.time_sync_state);
 }
 static void process(uint32_t now)
 {
@@ -345,7 +362,7 @@ static void process(uint32_t now)
         metadata_config_state=GPS_GetConfig()->state; metadata_imu_verified=lsm6ds3_config_verified;
         if (r!=FR_OK) fail(r,LOG_CARD_ERROR);
     }
-    if (sd_log_state==LOG_RECORDING && stop_requested && count==0) {
+    if (sd_log_state==LOG_RECORDING && stop_requested && count==0 && !stop_has_raw()) {
         if (opened) close_file();
         if (sd_log_state==LOG_RECORDING) {
             sd_diag.clean_shutdown=1;

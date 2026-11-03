@@ -158,6 +158,18 @@ uint8_t ImuStream_Peek(ImuRecord *r)
 #endif
     *r=queue[tail]; return 1;
 }
+uint8_t ImuStream_PeekNext(ImuRecord *r)
+{
+    uint32_t m=lock(); uint8_t found=ImuStream_Count()>1;
+    if (found) *r=queue[(tail+1U)%IMU_STREAM_CAPACITY];
+    unlock(m); return found;
+}
+uint8_t ImuStream_Latest(ImuRecord *r)
+{
+    uint32_t m=lock(); uint8_t found=head!=tail;
+    if (found) *r=queue[(head+IMU_STREAM_CAPACITY-1U)%IMU_STREAM_CAPACITY];
+    unlock(m); return found;
+}
 void ImuStream_Consume(void)
 {
 #ifndef LAPTUNE_HOST_TEST

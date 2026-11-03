@@ -33,7 +33,7 @@ systemu plików na nowo włożonej karcie.
 
 DRDY i SPI2 DMA działają także podczas SD/TFT. Pierścień 255 rekordów
 przechowuje około 2,45 s IMU przy 104 Hz. Kolejka zapisu ma 16 rekordów; jej zapełnienie zatrzymuje pobieranie z pierścienia.
-Przed pierwszym uzbrojeniem IMU wymagany jest przygotowany plik SD. Brak fixa
+Na mapowanie GPS próbki czekają 700 ms w tym samym pierścieniu; [opis PPS i budżet opóźnień](GPS_PPS.md). Przed pierwszym uzbrojeniem IMU wymagany jest przygotowany plik SD. Brak fixa
 lub UTC nie zatrzymuje zapisu. Szczegóły diagnostyki startu i pamięci:
 [P0_REVIEW_2026-11-02.md](P0_REVIEW_2026-11-02.md).
 Po przepełnieniu nie wstawiamy sztucznych próbek: luki NR oraz liczniki
@@ -43,7 +43,8 @@ Błędy osi są oddzielone od błędów karty; sześć pól wektorów jest wtedy
 `sd_log_written` oznacza rekordy przyjęte przez `f_write`, nie gwarancję
 trwałości flash. Rotacja i synchronizacja ograniczają skutki odłączenia
 zasilania; nagłe wyłączenie może uszkodzić aktualizowane struktury FAT.
-Przed wyjęciem podczas pracy nadal użyj B1 i zaczekaj na `SD SAVED`.
+Stopka `REC S0007/LOG0001.TXT` pokazuje skrót sesji i nazwę pliku.
+B1 opróżnia także próbki czekające na GPS. Przed wyjęciem podczas pracy nadal użyj B1 i zaczekaj na `SD SAVED`.
 
 ## Diagnostyka błędów
 
@@ -81,7 +82,7 @@ W debuggerze: `sd_log_state`, `sd_log_filename`, `sd_log_session_dir`,
 
 ## Testy
 
-`bash tests/run.sh` uruchamia 15 programów z ASan/UBSan, w tym rzeczywisty
+`bash tests/run.sh` uruchamia 16 programów z ASan/UBSan, w tym rzeczywisty
 FatFs na obrazie FAT w RAM, format 36 kolumn, JSON/LFN, rotację, B1,
 wyjmowanie i zmianę karty, błędy, pełny wolumin oraz 30 minut czasu
 symulowanego. Testy sprzętowe i ich ograniczenia: [P0_LOGGER.md](P0_LOGGER.md).
