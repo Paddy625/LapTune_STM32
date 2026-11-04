@@ -79,6 +79,12 @@ FRESULT Session_Write(const char *dir)
     WRITE("  \"gps_timeout_us\": 800000, \"gps_assembly_deadline_us\": 180000, \"gps_nominal_hz\": 5,\n");
     const GPS_ConfigStatus *c=&config;
     WRITE("  \"gps_uart_baud\": %lu, \"gps_configuration_state\": %u, \"gps_measurement_ms\": %u,\n",(unsigned long)c->baud,(unsigned)c->state,c->measurement_ms);
+    WRITE("  \"gps_acquisition_only\": %u, \"gps_nmea_sentences\": %lu, \"gps_nmea_fix_sentences\": %lu,\n",c->acquisition_only,(unsigned long)gps.nmea_sentences,(unsigned long)gps.nmea_fix_sentences);
+    if (r==FR_OK) r=number64(&f,"gps_nmea_last_us",gps.nmea_last_us);
+    if (r==FR_OK) r=number64(&f,"gps_nmea_last_fix_us",gps.nmea_last_fix_us);
+    WRITE("  \"gps_recovery_attempts\": %lu,\n",(unsigned long)gps.recovery_attempts);
+    if (r==FR_OK) r=number64(&f,"gps_recovery_us",gps.recovery_us);
+    STR("gps_recovery_reason","120 s fresh zero-CNO/no-code-lock; at most one GNSS hot restart per MCU boot; BBR preserved");
     WRITE("  \"gps_min_period_ms\": %lu, \"gps_max_period_ms\": %lu, \"gps_history_misses\": %lu,\n",(unsigned long)gps.min_period_ms,(unsigned long)gps.max_period_ms,(unsigned long)gps.history_misses);
     const GPS_ReceiverStatus *rx=&gps.receiver;
     WRITE("  \"gps_receiver_seen\": %u, \"gps_sol_fix_type\": %u, \"gps_sol_flags\": %u,\n",rx->seen,rx->fix_type,rx->sol_flags);

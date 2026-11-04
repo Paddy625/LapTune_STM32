@@ -16,15 +16,15 @@ static volatile uint8_t restart_rx, overflow;
 static GPS_Data data;
 static GPS_ConfigStatus configuration;
 typedef enum { DISCOVER_SEND, DISCOVER_WAIT, PORT_SET, SWITCH_WAIT,
-               INFO_SEND,INFO_WAIT,SETTING_SEND, SETTING_DELAY, SETTING_WAIT, CONFIG_DONE, CONFIG_RETRY } Phase;
+               INFO_SEND,INFO_WAIT,SETTING_SEND, SETTING_DELAY, SETTING_WAIT, ACQUIRE, RECOVERY_WAIT, CONFIG_DONE, CONFIG_RETRY } Phase;
 static Phase phase;
 static uint32_t phase_ms;
 static uint8_t probe,probes,setting,attempt,port_attempts,setting_ack,pulse_loaded;
 static uint8_t port_config[20];
-/* Disable default NMEA; coherent UBX POSLLH/VELNED/SOL at 5 Hz, UTC at 1 Hz. */
+/* Restore the proven GGA/RMC startup profile. Add coherent UBX only after fix. */
 static const uint8_t classes[]={0xF0,0xF0,0xF0,0xF0,0xF0,0xF0,1,1,1,1};
 static const uint8_t messages[]={1,2,3,5,0,4,2,0x12,6,0x21};
-static const uint8_t rates[]={0,0,0,0,0,0,1,1,1,5};
+static const uint8_t rates[]={0,0,0,0,1,1,1,1,1,5};
 enum { NAV_RATE_SETTING=sizeof(messages), PULSE_SETTING, TIMTP_SETTING, ALL_SETTINGS };
 static char sw_version[31]="unknown",hw_version[11]="unknown";
 static uint64_t boundary_times[16];
@@ -36,6 +36,59 @@ static uint8_t ubx_state,ubx_class,ubx_id,ubx_a,ubx_b,ubx_check;
 static uint16_t ubx_length,ubx_index;
 static uint8_t ubx_payload[64];
 static uint8_t diagnostic_index,sky_nonzero,sky_locked,sky_max;
+static uint64_t no_signal_since;
+/* NMEA is a startup/health signal only. Stream fields without a line buffer or
+   GPS_NMEA_Parse's stack frame (this runs inside the storage service hook). */
+static struct {
+    char type[6];
+    uint8_t state,sum,check,field,length,fix,status;
+} nmea;
+
+static uint8_t message_rate(void)
+{
+    if (setting==TIMTP_SETTING) return configuration.acquisition_only ? 0 : 1;
+    return configuration.acquisition_only && setting>=6 ? 0 : rates[setting];
+}
+static int hex_digit(uint8_t ch)
+{
+    if (ch>='0' && ch<='9') return ch-'0';
+    if (ch>='A' && ch<='F') return ch-'A'+10;
+    if (ch>='a' && ch<='f') return ch-'a'+10;
+    return -1;
+}
+static void nmea_byte(uint8_t ch)
+{
+    if (ch=='$') { memset(&nmea,0,sizeof(nmea)); nmea.state=1; return; }
+    if (!nmea.state) return;
+    if (nmea.state>=2) {
+        int digit=hex_digit(ch);
+        if (digit<0) { nmea.state=0; return; }
+        if (nmea.state==2) { nmea.check=(uint8_t)(digit<<4); nmea.state=3; return; }
+        nmea.state=0;
+        if ((nmea.check|(uint8_t)digit)!=nmea.sum || !nmea.type[0] ||
+            nmea.field<(nmea.type[2]=='R' ? 9 : 10)) return;
+        uint64_t us=Timebase_NowUs();
+        ++gps_diag.nmea_sentences; gps_diag.nmea_last_us=us;
+        if (nmea.fix) { ++gps_diag.nmea_fix_sentences; gps_diag.nmea_last_fix_us=us; }
+        return;
+    }
+    if (ch=='*') { nmea.state=2; return; }
+    if (ch<' ' || ch>'~') { nmea.state=0; return; }
+    nmea.sum^=ch;
+    if (ch==',') {
+        if (!nmea.field) {
+            if (nmea.length!=5 || (memcmp(nmea.type,"GP",2) && memcmp(nmea.type,"GN",2)) ||
+                (memcmp(nmea.type+2,"RMC",3) && memcmp(nmea.type+2,"GGA",3))) { nmea.state=0; return; }
+        } else if ((nmea.type[2]=='R' && nmea.field==2) || (nmea.type[2]=='G' && nmea.field==6)) {
+            nmea.fix=nmea.length==1 && (nmea.type[2]=='R' ? nmea.status=='A' : (nmea.status>='1' && nmea.status<='5'));
+        }
+        if (++nmea.field>20) { nmea.state=0; return; }
+        nmea.length=0; return;
+    }
+    if (!nmea.field && nmea.length<5) nmea.type[nmea.length]=(char)ch;
+    nmea.status=ch;
+    if (++nmea.length>100) nmea.state=0;
+}
 
 static uint16_t le16(const uint8_t *p) { return (uint16_t)p[0]|((uint16_t)p[1]<<8); }
 static uint32_t le32(const uint8_t *p) { return (uint32_t)le16(p)|((uint32_t)le16(p+2)<<16); }
@@ -46,6 +99,7 @@ static void receiver_status(uint64_t us)
         ubx_length==8U+12U*ubx_payload[4]) {
         r->sky_channels=ubx_payload[4]; r->cno_nonzero=sky_nonzero;
         r->code_locked=sky_locked; r->cno_max=sky_max; r->sky_rx_us=us; r->seen|=GPS_RX_SKY;
+        if (sky_nonzero || sky_locked) no_signal_since=0;
     } else if (ubx_class==0x0A && ubx_id==9 && (ubx_length==60 || ubx_length==68)) {
         r->noise_per_ms=le16(ubx_payload+16); r->agc_count=le16(ubx_payload+18);
         r->antenna_status=ubx_payload[20]; r->antenna_power=ubx_payload[21]; r->hw_flags=ubx_payload[22];
@@ -61,7 +115,7 @@ static void receiver_status(uint64_t us)
 }
 static void config_error(GPS_ConfigError reason,uint32_t now)
 {
-    if (setting>=PULSE_SETTING && configuration.state==GPS_CONFIG_READY) {
+    if (!configuration.acquisition_only && setting>=PULSE_SETTING && configuration.state==GPS_CONFIG_READY) {
         configuration.pps_state=2; configuration.pps_error=reason;
         phase=CONFIG_DONE; phase_ms=now; return;
     }
@@ -95,7 +149,7 @@ static void diagnostic_poll(void)
 static uint8_t change_baud(uint32_t baud)
 {
     if (tx_busy || HAL_UART_AbortReceive(gps_uart)!=HAL_OK) return 0;
-    tail=head; ubx_state=0; restart_rx=overflow=0;
+    tail=head; ubx_state=nmea.state=0; restart_rx=overflow=0;
     boundary_tail=boundary_head; irq_ubx_state=0;
     gps_uart->Init.BaudRate=baud;
     if (HAL_UART_Init(gps_uart)!=HAL_OK) return 0;
@@ -108,6 +162,7 @@ static void discover(void)
     configuration.state=GPS_CONFIG_PENDING; configuration.error=GPS_CFG_OK;
     configuration.measurement_ms=configuration.nav_rate=configuration.time_ref=0;
     configuration.attempts=0; configuration.pps_state=configuration.pps_error=pulse_loaded=0;
+    configuration.acquisition_only=1; no_signal_since=0;
     probe=(gps_uart->Init.BaudRate==GPS_RUN_BAUD); probes=setting=attempt=port_attempts=0;
     phase=DISCOVER_SEND;
 }
@@ -145,7 +200,7 @@ static void packet_received(uint32_t now)
         if (message_setting && ubx_id==1 && (ubx_length==3 || ubx_length==8)) {
             uint8_t cls=setting<NAV_RATE_SETTING ? classes[setting] : 0x0D;
             uint8_t id=setting<NAV_RATE_SETTING ? messages[setting] : 1;
-            uint8_t expected=setting<NAV_RATE_SETTING ? rates[setting] : 1;
+            uint8_t expected=message_rate();
             if (ubx_payload[0]!=cls || ubx_payload[1]!=id) return;
             if (ubx_payload[ubx_length==8 ? 3 : 2]!=expected || !setting_ack) { config_error(GPS_CFG_VERIFY,now); return; }
         } else if (setting==NAV_RATE_SETTING && ubx_id==8 && ubx_length==6) {
@@ -165,6 +220,7 @@ static void packet_received(uint32_t now)
             if (memcmp(port_config,ubx_payload,10) || !setting_ack) { config_error(GPS_CFG_VERIFY,now); return; }
         } else return;
         ++setting; attempt=0; phase=SETTING_SEND;
+        if (configuration.acquisition_only && setting==PULSE_SETTING) setting=TIMTP_SETTING;
     }
 }
 static void ubx_byte(uint8_t ch,uint32_t now)
@@ -239,6 +295,7 @@ static void configure(uint32_t now)
         break;
     case SETTING_SEND:
         if (setting==ALL_SETTINGS) {
+            if (configuration.acquisition_only) { phase=ACQUIRE; phase_ms=now; break; }
             configuration.pps_state=1; configuration.pps_error=GPS_CFG_OK;
             phase=CONFIG_DONE; phase_ms=now; break;
         }
@@ -246,7 +303,7 @@ static void configure(uint32_t now)
         if (setting<NAV_RATE_SETTING || setting==TIMTP_SETTING) {
             uint8_t payload[]={setting<NAV_RATE_SETTING ? classes[setting] : 0x0D,
                 setting<NAV_RATE_SETTING ? messages[setting] : 1,
-                setting<NAV_RATE_SETTING ? rates[setting] : 1};
+                message_rate()};
             configuration.message_id=1; result=send_ubx(1,payload,3);
         } else if (setting==NAV_RATE_SETTING) {
             configuration.message_id=8; result=send_ubx(8,rate,sizeof(rate));
@@ -270,9 +327,19 @@ static void configure(uint32_t now)
             if (attempt>=3) config_error(GPS_CFG_NO_RESPONSE,now); else phase=SETTING_SEND;
         }
         break;
+    case ACQUIRE:
+        if (gps_diag.nmea_fix_sentences && Timebase_NowUs()-gps_diag.nmea_last_fix_us<1000000U) {
+            configuration.acquisition_only=0; setting=6; attempt=0;
+            configuration.state=GPS_CONFIG_PENDING; phase=SETTING_SEND; no_signal_since=0; break;
+        }
+        /* fall through */
     case CONFIG_DONE:
         if (!data.connected && (uint32_t)(now-data.sentence_ms)>=GPS_FRESH_MS) discover();
         else if ((uint32_t)(now-phase_ms)>=1000U) { diagnostic_poll(); phase_ms=now; }
+        break;
+    case RECOVERY_WAIT:
+        /* CFG-RST need not ACK. Wait for TX and GNSS restart, never block IMU/SD. */
+        if (!tx_busy && (uint32_t)(now-phase_ms)>=1000U) discover();
         break;
     case INFO_SEND:
         result=send_frame(0x0A,4,NULL,0); phase=INFO_WAIT; phase_ms=now; break;
@@ -288,12 +355,33 @@ static void configure(uint32_t now)
     if (result!=HAL_OK) config_error(GPS_CFG_UART,now);
 }
 
+static void recover_stalled_receiver(uint32_t now)
+{
+    uint64_t us=Timebase_NowUs(); const GPS_ReceiverStatus *r=&gps_diag.receiver;
+    if ((phase!=ACQUIRE && phase!=CONFIG_DONE) || gps_diag.recovery_attempts ||
+        !(r->seen&GPS_RX_SKY) || us<r->sky_rx_us || us-r->sky_rx_us>6000000U ||
+        r->cno_nonzero || r->code_locked || data.position_valid || data.receiver_fix_valid ||
+        (gps_diag.nmea_fix_sentences && us-gps_diag.nmea_last_fix_us<3000000U)) {
+        no_signal_since=0; return;
+    }
+    if (!no_signal_since) no_signal_since=us;
+    if (us-no_signal_since<120000000U || tx_busy) return;
+    /* Controlled GNSS-only hot restart. Preserve BBR, almanac and ephemerides.
+       One attempt per MCU boot, including a failed TX: no endless reset loop. */
+    ++gps_diag.recovery_attempts; gps_diag.recovery_us=us;
+    const uint8_t hot_start[]={0,0,2,0};
+    if (send_ubx(4,hot_start,sizeof(hot_start))!=HAL_OK) return;
+    GPS_Epoch_ResetStream(&data,us);
+    configuration.state=GPS_CONFIG_PENDING; configuration.pps_state=0;
+    phase=RECOVERY_WAIT; phase_ms=now;
+}
+
 HAL_StatusTypeDef GPS_Init(UART_HandleTypeDef *uart)
 {
     if (uart == NULL) return HAL_ERROR;
     gps_uart = uart; head = tail = 0;
     restart_rx = overflow = tx_busy = 0;
-    diagnostic_index=0;
+    diagnostic_index=0; memset(&nmea,0,sizeof(nmea));
     GPS_NMEA_Init(&data);
     GPS_Epoch_Init();
     boundary_head=boundary_tail=irq_ubx_state=0;
@@ -368,13 +456,13 @@ void GPS_Process(uint32_t now)
     if (gps_uart == NULL) return;
     if (tx_busy && Timebase_NowUs()-tx_started>100000U) {
         (void)HAL_UART_AbortTransmit(gps_uart); tx_busy=0; ++gps_diag.tx_errors;
-        if (phase!=CONFIG_DONE) config_error(GPS_CFG_UART,now);
+        if (phase!=CONFIG_DONE && phase!=ACQUIRE) config_error(GPS_CFG_UART,now);
     }
     if (overflow) { overflow=0; ++gps_diag.rx_overflows; restart_rx=1; }
     if (restart_rx) {
         restart_rx = 0;
         (void)HAL_UART_AbortReceive(gps_uart);
-        tail = head; ubx_state = 0;
+        tail = head; ubx_state = nmea.state = 0;
         boundary_tail=boundary_head; irq_ubx_state=0;
         GPS_Epoch_ResetStream(&data,Timebase_NowUs());
         if (HAL_UART_Receive_IT(gps_uart, &rx_byte, 1U) != HAL_OK) restart_rx = 1;
@@ -389,7 +477,8 @@ void GPS_Process(uint32_t now)
             packet_us=boundary_times[boundary_tail]; boundary_tail=(boundary_tail+1U)%16U;
         }
         if (ubx_state) { ubx_byte(ch,now); continue; }
-        if (ch==0xB5) ubx_state=1; /* Ignore NMEA/other noise; UBX is the only source. */
+        if (ch==0xB5) { ubx_state=1; nmea.state=0; }
+        else nmea_byte(ch);
     }
     uint64_t current=Timebase_NowUs();
     GPS_Epoch_Service(&data,current); GPS_Time_Service(current);
@@ -400,7 +489,12 @@ void GPS_Process(uint32_t now)
         data.datetime_ms=(uint32_t)(current/1000U); data.datetime_valid=1;
     }
     data.time_sync_state=GPS_Time_Diagnostics().state;
+    if (configuration.acquisition_only && gps_diag.nmea_sentences &&
+        current-gps_diag.nmea_last_us<3000000U) {
+        data.connected=1; data.sentence_ms=(uint32_t)(gps_diag.nmea_last_us/1000U);
+    }
     configure(now);
+    recover_stalled_receiver(now);
 }
 
 const GPS_Data *GPS_GetData(void) { return &data; }

@@ -1,7 +1,7 @@
 #ifndef LAPTUNE_BOOT_IDENTITY_H
 #define LAPTUNE_BOOT_IDENTITY_H
 #include <stdint.h>
-#define LAPTUNE_FIRMWARE_VERSION "2.1.1"
+#define LAPTUNE_FIRMWARE_VERSION "2.1.2"
 /* Two reserved 1 KB flash pages, outside the linker's application image. */
 uint8_t BootIdentity_Init(void);
 const char *BootIdentity_Directory(void);

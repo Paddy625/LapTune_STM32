@@ -29,6 +29,8 @@ typedef struct {
     uint64_t uart_first_us,uart_last_us,checksum_first_us,checksum_last_us;
     uint64_t uart_phase_first_us[2],uart_phase_last_us[2];
     uint32_t checksum_by_phase[2],tx_errors;
+    uint32_t nmea_sentences,nmea_fix_sentences,recovery_attempts;
+    uint64_t nmea_last_us,nmea_last_fix_us,recovery_us;
     GPS_ReceiverStatus receiver;
 } GPS_Diagnostics;
 extern GPS_Diagnostics gps_diag;

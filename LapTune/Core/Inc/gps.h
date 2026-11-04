@@ -17,6 +17,7 @@ typedef struct {
     uint16_t measurement_ms,nav_rate,time_ref;
     uint8_t message_id,attempts;
     uint8_t pps_state,pps_error; /* pending=0, verified=1, unavailable/error=2 */
+    uint8_t acquisition_only; /* legacy GGA/RMC startup; UBX/PPS enabled after first fix */
 } GPS_ConfigStatus;
 
 HAL_StatusTypeDef GPS_Init(UART_HandleTypeDef *uart);

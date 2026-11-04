@@ -1,6 +1,8 @@
-# GPS i PPS — firmware 2.1.0
+# GPS i PPS — firmware 2.1.2
 
-Dodatkowa diagnostyka od 2.1.1: [GPS_DIAGNOSTICS.md](GPS_DIAGNOSTICS.md). Podane niżej wielkości RAM dotyczą kompilacji 2.1.0.
+Diagnostyka i zmiana startu GPS w 2.1.2: [GPS_DIAGNOSTICS.md](GPS_DIAGNOSTICS.md).
+Podane na końcu historyczne wielkości RAM dotyczą kompilacji 2.1.0;
+aktualny wynik zawiera `memory-report.json` z danej kompilacji.
 
 GPS pracuje z częstotliwością **5 Hz**. LSM6DS3 pracuje z natywną ODR
 **104 Hz**; nie ma ustawienia 100 Hz. Rejestrowane są rzeczywiste zbocza DRDY,
@@ -33,7 +35,13 @@ uzyskania fixa anteny w rzeczywistych warunkach.
 PA0 jest wejściem sprzętowego przechwytywania TIM2_CH1. UART pozostaje
 GPS TX → PB11, GPS RX ← PB10. Szczegóły: [GPS_NEO6M.md](GPS_NEO6M.md).
 
-Po konfiguracji UART 38400 i CFG-RATE 200 ms firmware odczytuje legacy
+Od 2.1.2 konfiguracja PPS czeka na pierwszy ważny fix GGA/RMC.
+Początkowo działa sprawdzona konfiguracja NMEA 5 Hz, a
+`gps_acquisition_only=1` opisuje ten etap. Dopiero potem włączane są
+epoki UBX i PPS; dane IMU są rejestrowane od początku, niezależnie od GPS.
+NMEA nie zastępuje czasu pomiaru UBX ani nie ustawia lock PPS.
+
+Po uzyskaniu fixa, przy UART 38400 i CFG-RATE 200 ms, firmware odczytuje legacy
 CFG-TP, zachowuje opóźnienia anteny/RF/użytkownika, ustawia impuls dodatni
 1 Hz, długość 100 ms, odniesienie GPS. Sprawdza ACK i odczyt ustawień.
 Następnie włącza i sprawdza TIM-TP (klasa 0D, ID 01). Konfiguracja nie jest
@@ -106,7 +114,8 @@ folderu oraz `boot_id` w JSON. Skrót nie jest unikalnym identyfikatorem importu
 ## Diagnostyka i sprawdzenie po wgraniu
 
 `gps_configuration_state=1` oznacza zweryfikowaną konfigurację nawigacji.
-`pps_configuration_state`: 0=trwa, 1=ACK/odczyt PPS i TIM-TP potwierdzony,
+`pps_configuration_state`: 0=oczekiwanie na fix lub trwa konfiguracja,
+1=ACK/odczyt PPS i TIM-TP potwierdzony,
 2=niedostępne/błąd (szczegół w `pps_configuration_error`).
 `pps_pulses` liczy capture, `pps_timtp_packets` wiadomości, `pps_matched`
 połączone pary, `pps_rejected` odrzucone próby, `pps_locks/losses` zmiany lock.

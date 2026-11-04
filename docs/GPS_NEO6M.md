@@ -1,4 +1,4 @@
-# GPS u-blox NEO-6M — P0
+# GPS u-blox NEO-6M — firmware 2.1.2
 
 Moduł GY-NEO6MV2 komunikuje się przez USART3. Zasilanie podaj według
 specyfikacji konkretnego breakouta; poziomy UART przy STM32 muszą wynosić
@@ -19,22 +19,38 @@ Start UART: 9600 bit/s, 8N1. Automat sprawdza 9600/38400 i ustawia
 Po restarcie odbiornika lub MCU rozpoznanie jest ponawiane. Nie zapisujemy
 konfiguracji trwale w pamięci GPS. Wymagamy ACK dla CFG-MSG/CFG-RATE, sprawdzamy NAK i odczyt ustawień.
 
-P0 odczytuje MON-VER oraz ustawia i sprawdza CFG-MSG/CFG-RATE:
+Start nawigacji wraca do konfiguracji wiadomości używanej przed P0
+(commit `461c935`): GGA/RMC po 5 Hz, GLL/GSA/GSV/VTG wyłączone.
+Strumienie NAV-POSLLH/VELNED/SOL/TIMEUTC i TIM-TP są początkowo wyłączone,
+również jeśli ich ustawienia zachował zasilany bateryjnie odbiornik.
+`gps_acquisition_only=1` oznacza oczekiwanie na ważny fix NMEA.
+Dopiero po jego odebraniu firmware włącza i weryfikuje poniższe strumienie
+UBX oraz konfiguruje PPS. GGA/RMC pozostają włączone jako niezależna
+kontrola odbioru; ich wartości nie są domieszane do rekordów UBX.
 
-| Komunikat | Częstość | Zastosowanie |
+| Komunikat | Częstość po pierwszym fixie | Zastosowanie |
 | --- | --- | --- |
+| GGA/RMC | 5 Hz | potwierdzenie fixa na sprawdzonej ścieżce NMEA |
 | NAV-POSLLH | 5 Hz | lon/lat, wysokość MSL |
 | NAV-VELNED | 5 Hz | poziome gSpeed |
 | NAV-SOL | 5 Hz | rodzaj fixa, gpsFixOK, weekSet, TOWSet, satelity |
 | NAV-TIMEUTC | 1 Hz | data/czas UTC do modelu PPS |
 | TIM-TP | 1 Hz | oznaczenie następnego impulsu PPS |
-| GGA/GLL/GSA/GSV/RMC/VTG | wyłączone | unikanie duplikatów i mieszanego cache NMEA |
+| GLL/GSA/GSV/VTG | wyłączone | ograniczenie ruchu UART |
 
-CFG-RATE: measRate=200 ms, navRate=1, timeRef=GPS. Strumień nominalny:
-(36+44+60) × 5 + 28 + 24 = **752 B/s**, czyli 7520 bit/s w 8N1,
-około 20% UART 38400. Pozostaje zapas na odpowiedzi konfiguracyjne.
+CFG-RATE: measRate=200 ms, navRate=1, timeRef=GPS, tak jak przed P0.
+Część UBX ma nominalnie (36+44+60) × 5 + 28 + 24 = **752 B/s**.
+Dochodzi zmienna długość GGA/RMC po 5 Hz; przy UART 38400 bit/s
+(3840 B/s w 8N1) pozostaje zapas na konfigurację i diagnostykę.
 Dodatkowe komunikaty wcześniej włączone innym narzędziem nie są globalnie
 wyłączane; nadmiar ujawni się jako przepełnienie bufora.
+
+Podczas braku fixa działa [diagnostyka i ograniczona próba odzyskania
+odbioru](GPS_DIAGNOSTICS.md). Po 120 s ciągłych świeżych odczytów SVINFO
+bez C/N₀ i śledzenia kodu możliwy jest jeden gorący restart samego GNSS
+na uruchomienie MCU. Nie kasuje danych podtrzymywanych baterią, nie zmienia
+konfiguracji trwale i nie zatrzymuje zapisu IMU. Sam brak pozycji przy
+śledzonych sygnałach nie uruchamia tej operacji.
 
 Bufor UART: 1024 bajty, przerwanie odbioru jednego bajtu. Koniec ramki dostaje
 64-bitowy czas w ISR; checksum i interpretacja są wykonywane poza ISR.
@@ -69,4 +85,4 @@ CFG-TP/TIM-TP nie blokuje nawigacji 5 Hz. Odbiornik nie jest kalibrowany
 na podstawie ODR IMU. Model dynamiki, oszczędzanie energii i static hold
 nie są zmieniane; wymagają osobnej weryfikacji na konkretnym odbiorniku.
 
-Diagnostyka odbiornika podczas NO FIX (2.1.1): [C/N₀, antena, SOL i konfiguracja](GPS_DIAGNOSTICS.md).
+Diagnostyka odbiornika podczas NO FIX (od 2.1.1, rozszerzona w 2.1.2): [C/N₀, antena, SOL i konfiguracja](GPS_DIAGNOSTICS.md).

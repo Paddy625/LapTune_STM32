@@ -1,4 +1,4 @@
-# Diagnostyka NO FIX — firmware 2.1.1
+# Diagnostyka NO FIX — firmware 2.1.2
 
 `GPS NO FIX 5HZ S:00` oznacza zweryfikowaną konfigurację 5 Hz i brak
 satelitów użytych w rozwiązaniu. Liczba S nie określa liczby odbieranych
@@ -9,6 +9,38 @@ przepełnienia, niepełne epoki i błędy UART w fazie pracy pozostają zerowe,
 logger odbiera kompletne rozwiązania oznaczane jako nieważne. Do rozróżnienia
 braku śledzenia satelitów od ograniczeń rozwiązania potrzebne są dane
 odbiornika opisane poniżej. Brak PPS sam w sobie nie blokuje pozycji.
+
+## Zmiana startu i odzyskiwanie w 2.1.2
+
+Porównanie z ostatnią działającą wersją `461c935` wskazało zmianę
+protokołu wyjściowego: GGA/RMC zastąpiono od początku strumieniem UBX.
+W ostatniej analizowanej sesji po ponad 12 minutach odbiornik zgłosił
+3838 nieważnych epok, zero śledzonych kanałów i zero C/N₀, przy zerowych
+błędach checksum, przepełnieniach oraz błędach UART w fazie pracy.
+Odczyty surowego statusu nie potwierdzają, żeby logger ukrywał poprawny fix.
+Nie ustalono jednak przyczyny braku śledzenia sygnału na fizycznym zestawie.
+
+Wersja 2.1.2 przywraca na początku sprawdzony profil **GGA/RMC 5 Hz**.
+Wyłącza na ten czas strumienie UBX NAV i TIM-TP; po odebraniu ważnego
+fixa NMEA włącza spójne epoki UBX oraz konfigurację PPS. GGA/RMC zostają
+włączone także później. Parser NMEA odczytuje status i sprawdza checksum;
+nie tworzy konkurencyjnego cache współrzędnych i nie miesza danych NMEA
+z rekordami UBX. W krótkiej fazie przejścia TFT i log czekają na ważną
+epokę UBX. Nie uzależniono rejestrowania IMU od tego oczekiwania.
+
+Dodano jedną ograniczoną próbę odzyskania odbioru na uruchomienie MCU.
+Warunkiem jest **120 s ciągłych świeżych odczytów NAV-SVINFO** z zerowym
+C/N₀ i zerowym śledzeniem kodu oraz brak ważnego fixa. Brak odpowiedzi,
+przestarzałe SVINFO lub śledzone sygnały nie spełniają warunku. Operacja
+używa CFG-RST z `navBbrMask=0`, `resetMode=2`: gorący restart tylko GNSS,
+bez kasowania podtrzymywanych danych, bez fabrycznego resetu i bez zapisu
+konfiguracji do pamięci nieulotnej. Po 1 s sterownik ponownie rozpoznaje
+UART i weryfikuje ustawienia. Nie uruchamia pętli resetów co 120 s.
+
+To przywrócenie zgodnego profilu i ograniczenie sposobu odzyskiwania,
+nie potwierdzona na sprzęcie naprawa odbioru RF. Testy hosta sprawdzają
+protokół i przepływ danych; czas uzyskania fixa wymaga sprawdzenia na NEO-6.
+Nie zadeklarowano fizycznej dokładności timestampów ani PPS.
 
 ## Dodatkowe odczyty
 
@@ -27,8 +59,8 @@ w bajcie 53) i format 60 B (jamInd w bajcie 45). Ramki diagnostyczne
 nie są łączone z pozycją, prędkością ani wysokością pomiarów.
 
 Format TXT pozostaje 36-kolumnowy, `format_version` JSON pozostaje 4.
-Nowe klucze JSON są dodatkowymi polami diagnostycznymi. Ekran i częstotliwości
-akwizycji pozostają takie jak w 2.1.0.
+Nowe klucze JSON są dodatkowymi polami diagnostycznymi. GPS pozostaje
+przy 5 Hz, IMU przy natywnej ODR 104 Hz; układ TFT pozostaje bez zmian.
 
 ## Pola SESSION.json
 
@@ -72,22 +104,41 @@ po uzyskaniu fixa, kiedy dalsze odpytywanie ustaje.
   2=tylko 3D, 3=automatyczny. Min elevation jest w stopniach, limit pDOP
   w jednostkach 0,1 (np. 250 oznacza 25,0).
 
-## Zebranie danych
+## Stan NMEA i próby odzyskiwania w SESSION.json
 
-1. W CubeIDE wykonaj Clean/Build, wgraj 2.1.1 i uruchom test na zewnątrz.
-2. Do zebrania diagnostyki wystarczy około 30 s; nie trzeba czekać kolejnych
-   6 minut. Naciśnij B1 i zaczekaj na `SD SAVED`.
-3. Odczytaj najnowszy `SESSION.json`, sprawdź wersję, maskę seen i datę
-   migawki. Przy kontrolowanym zatrzymaniu oczekiwane jest clean_shutdown=true.
-4. Gdy podejrzewasz wpływ nowo wyprowadzonego PPS, osobno powtórz próbę
-   z całkowicie odłączonym przewodem GPS–PA0, przepinając przy wyłączonym
-   zasilaniu. Pozycja jest od niego niezależna; timestampy UTC nie uzyskają
-   wtedy lock PPS. Zmieniając jeden element na raz, zachowaj tę samą antenę
-   i warunki odbioru.
+| Pole | Znaczenie |
+| --- | --- |
+| gps_acquisition_only | 1: profil GGA/RMC aktywny, oczekiwanie na pierwszy ważny fix przed włączeniem epok UBX i PPS |
+| gps_nmea_sentences | licznik rozpoznanych zdań GGA/RMC z poprawną checksum; zdania, nie epoki |
+| gps_nmea_fix_sentences | licznik takich zdań zgłaszających ważny fix; również nie licznik unikalnych epok |
+| gps_nmea_last_us | czas przetworzenia ostatniego poprawnego zdania NMEA w skali MCU |
+| gps_nmea_last_fix_us | czas przetworzenia ostatniego zdania NMEA z ważnym fixem w skali MCU |
+| gps_recovery_attempts | liczba prób ograniczonego restartu GNSS, najwyżej jedna na uruchomienie MCU |
+| gps_recovery_us | czas próby restartu w skali MCU; zero przed próbą |
 
-Z C/N₀, flag SOL i konfiguracji będzie można wybrać dalszy krok: sprawdzenie
-anteny/zasilania/zakłóceń lub konkretnej konfiguracji odbiornika. Nieważnej
-pozycji nie wolno zastępować zerami ani sztucznie oznaczać jako fix.
+`gps_received_epochs`, `gps_valid_epochs` i `gps_invalid_fixes` nadal
+liczą epoki UBX. Podczas oczekiwania w profilu GGA/RMC mogą pozostawać
+zerowe mimo działającej komunikacji. NMEA i UBX mają oddzielne liczniki.
+Historia liczników nie jest kasowana przy próbie odzyskiwania. Czasy
+NMEA służą ocenie świeżości komunikacji; nie są czasem pomiaru ani
+źródłem synchronizacji PPS.
+`gps_configuration_state=1` potwierdza ustawienia aktywnego etapu;
+nie oznacza jeszcze fixa, zakończenia etapu NMEA ani lock PPS.
+
+## Sprawdzenie aktualizacji
+
+1. Pobierz `main`, wykonaj Clean/Build w CubeIDE i wgraj **2.1.2**.
+   Archiwalny HEX 2.1.1 nie zawiera tych zmian.
+2. Po próbie naciśnij B1 i zaczekaj na `SD SAVED`. Zachowaj najnowszy
+   `SESSION.json` i ostatni plik TXT. Sprawdź wersję oraz `snapshot_t_us`;
+   przy kontrolowanym zatrzymaniu oczekiwane jest `clean_shutdown=true`.
+3. Najpierw sprawdź, czy rosną liczniki NMEA i czy pojawiły się zdania
+   z ważnym fixem. Następnie sprawdź przejście `gps_acquisition_only=0`,
+   poprawne epoki UBX i, niezależnie, lock PPS. Podczas NO FIX pola RF
+   i licznik odzyskiwania pokazują stan próby.
+
+Samo zwiększenie licznika odebranych wiadomości nie potwierdza fixa.
+Nieważnej pozycji nie wolno zastępować zerami ani sztucznie oznaczać jako fix.
 
 ## Pamięć i sprawdzenie programu
 
@@ -95,9 +146,21 @@ Nie zwiększono buforów UART, IMU ani kolejki SD. Usunięto lokalną kopię
 GPS_Diagnostics w funkcji pobierającej migawkę: dane trafiają bezpośrednio
 do bufora wywołującego pod krótką maską przerwań. Jest to istotne przy
 diagnostyce stosu na STM32F103RB. Dokładny RAM i pojedyncze ramki stosu
-podaje `memory-report.json` po budowaniu. W sprawdzonej kompilacji statyczny RAM wynosi 17072 B (Debug) i 17080 B (Release), po 48 B więcej niż w 2.1.0; pozostaje 3408/3400 B na stos i stertę przy rezerwacjach 2560/512 B. Rzeczywisty szczyt nadal wymaga
-sprawdzenia pola `stack_free_min_bytes` na urządzeniu.
+podaje `memory-report.json` po budowaniu. W kompilacji **2.1.2** statyczny
+RAM wynosi 17128 B (Debug) i 17136 B (Release); pozostaje 3352/3344 B
+na stos i stertę przy rezerwacjach 2560/512 B. Parser statusu NMEA
+przetwarza bajty bez bufora zdania i bez lokalnej kopii GPS_Data;
+jego ramka stosu Debug ma 32 B. Session_Write ma ramkę 920 B.
+Są to rozmiary pojedynczych ramek, nie pomiar maksymalnego stosu całego
+łańcucha wywołań z przerwaniami. Rzeczywisty szczyt nadal wymaga
+sprawdzenia pola `stack_free_min_bytes` na urządzeniu; ostatni pomiar
+starszego firmware wynosił tylko 176 B wolnego z rezerwy stosu.
 
 Testy obejmują długie SVINFO z maksimum C/N₀ w ostatnim kanale, checksum,
 błędną długość, oba formaty MON-HW, surowe flagi SOL/UTC, odczyty bez zapisu
 ustawień, NAK, timeout TX i ustanie odpytywania po odzyskaniu fixa.
+Nowe testy sprawdzają osobno start przez GGA lub RMC, brak publikacji
+współrzędnych z NMEA, przejście do UBX/PPS oraz jeden restart po 120 s
+zerowego śledzenia. Brak PPS, nieaktualne SVINFO i śledzone sygnały
+nie powodują restartów. Pełny zestaw testów hosta (ASan/UBSan) oraz
+kompilacje ARM Debug i Release przeszły; nie jest to test odbioru RF.

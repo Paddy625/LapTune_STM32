@@ -1,8 +1,6 @@
 # LapTune_STM32
 
-**Gotowy HEX do wgrania przez ST-LINK:** [archiwum 2.1.1](firmware/README.md).
-
-Firmware loggera STM32. **2.1.1: [diagnostyka NO FIX — sygnał, antena i tryb GPS](docs/GPS_DIAGNOSTICS.md)**. **Synchronizacja 2.1.0: [poprawki GPS, synchronizacja PPS i uproszczenia](docs/GPS_PPS.md)**. **P0: [format danych, DRDY i instrukcja wgrania](docs/P0_LOGGER.md)**.
+Firmware loggera STM32. **2.1.2: [start GPS zgodny ze wcześniejszym GGA/RMC i ograniczone odzyskiwanie odbioru](docs/GPS_DIAGNOSTICS.md)**. **[Synchronizacja GPS–IMU przez PPS](docs/GPS_PPS.md)**. **P0: [format danych, DRDY i instrukcja wgrania](docs/P0_LOGGER.md)**.
 **Przegląd P0 i diagnostyka:** [raport zmian](docs/P0_REVIEW_2026-11-02.md).
 Wymagane przewody: **INT1 → PA1 (A1), INT2 → PA4 (A2)**. PPS GPS: **PA0 (A0)**.
 
@@ -12,7 +10,11 @@ Obsługa wyświetlacza **ST7735S 160×128**: [schemat połączeń, kod i uruchom
 
 GPS **u-blox NEO-6M / GY-NEO6MV2**: [połączenia UART, pozycja, wysokość MSL i data/czas UTC](docs/GPS_NEO6M.md).
 Firmware konfiguruje **5 Hz, UART 38400 baud**, z automatycznym rozpoznaniem
-9600/38400 przy starcie. Do konfiguracji wymagane jest **PB10 → RX GPS**.
+9600/38400 przy starcie. Najpierw uruchamia GGA/RMC jak w wersji sprzed P0;
+po ważnym fixie włącza spójne epoki UBX i PPS. Zapis IMU działa niezależnie
+od fixa. Do konfiguracji wymagane jest **PB10 → RX GPS**.
+Aktualizację pobierz z `main`, wykonaj Clean/Build i wgraj w CubeIDE.
+[Archiwum HEX 2.1.1](firmware/README.md) dotyczy poprzedniej wersji, nie 2.1.2.
 
 Logger **microSD na SPI1 wspólnym z TFT**: [połączenia i format TXT](docs/SD_LOGGING.md).
 Automatycznie zamyka plik co 3 minuty i rozpoczyna kolejny; synchronizuje dane

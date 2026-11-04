@@ -12,7 +12,9 @@ uint64_t Timebase_NowUs(void) { return (uint64_t)tick*1000U; }
 static int powered,rx_connected,corrupt_reply,nak,nak_port,ignore_port,ignore_message,ignore_rate,fail_tx,fail_init,short_reply;
 static int drop_ack,unsupported_pps,unsupported_diagnostics,no_fix_receiver,hold_diagnostic_tx;
 static unsigned diagnostic_polls;
-static unsigned tx_aborts;
+static unsigned tx_aborts,recovery_commands;
+static int sky_tracking,suppress_sky,nmea_bad_checksum,suppress_nmea;
+static uint32_t recovery_command_tick;
 static uint8_t pulse_configuration[20];
 static unsigned transmissions,port_sets,rate_polls;
 uint32_t HAL_GetTick(void) { return tick; }
@@ -37,6 +39,7 @@ static void sentence(const char *body)
 {
     uint8_t sum=0; char line[160];
     for (const char *p=body;*p;++p) sum^=(uint8_t)*p;
+    if (nmea_bad_checksum) sum^=1;
     snprintf(line,sizeof(line),"$%s*%02X\r\n",body,sum); feed((const uint8_t*)line,strlen(line));
 }
 HAL_StatusTypeDef HAL_UART_Receive_IT(UART_HandleTypeDef *handle,uint8_t *ptr,uint16_t length)
@@ -71,7 +74,8 @@ HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *handle,const uint8_t 
         if (unsupported_diagnostics) { const uint8_t nak[]={p[2],p[3]}; reply(5,0,nak,2); return HAL_OK; }
         if (p[2]==1) {
             assert(p[3]==0x30); uint8_t sky[8+12*20]={0}; sky[4]=20;
-            sky[8+19*12+3]=5; sky[8+19*12+4]=49; reply(1,0x30,sky,sizeof(sky));
+            if (sky_tracking) { sky[8+19*12+3]=5; sky[8+19*12+4]=49; }
+            if (!suppress_sky) reply(1,0x30,sky,sizeof(sky));
         } else if (p[2]==0x0A) {
             uint8_t hw[68]={0}; hw[20]=2; hw[21]=1; hw[53]=10; reply(0x0A,9,hw,68);
         } else if (p[3]==0x24) {
@@ -112,6 +116,11 @@ HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *handle,const uint8_t 
             else reply(6,1,response,sizeof(response));
         }
         break;
+    case 4:
+        /* Controlled GNSS-only hot start: never clear backup data. No ACK. */
+        assert(size==4 && payload[0]==0 && payload[1]==0 && payload[2]==2 && payload[3]==0);
+        ++recovery_commands; recovery_command_tick=tick;
+        break;
     case 7:
         if (unsupported_pps) { const uint8_t n[]={6,7}; reply(5,0,n,2); break; }
         if (!size) reply(6,7,pulse_configuration,20);
@@ -135,6 +144,14 @@ static void nav(void)
 {
     if (!powered || (uint32_t)(tick-last_nav)<measurement) return;
     last_nav=tick;
+    if (!suppress_nmea) {
+        if (message_rates[0][0]) sentence(no_fix_receiver ?
+            "GPGGA,123519,,,,,0,00,99.99,,,,,," :
+            "GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,");
+        if (message_rates[0][4]) sentence(no_fix_receiver ?
+            "GPRMC,123519,V,,,,,,,041126,,,N" :
+            "GPRMC,123519,A,4807.038,N,01131.000,E,22.4,84.4,041126,,,A");
+    }
     uint8_t pos[28]={0},vel[36]={0},sol[52]={0};
     for (unsigned i=0;i<4;++i) { pos[i]=vel[i]=sol[i]=(uint8_t)((tick%604800000U)>>(8*i)); }
     int32_t altitude=545400;
@@ -157,6 +174,7 @@ static void reset(uint32_t baud,uint32_t start)
     memset(pulse_configuration,0,20); pulse_configuration[12]=47;
     unsupported_pps=unsupported_diagnostics=no_fix_receiver=hold_diagnostic_tx=0; diagnostic_polls=tx_aborts=0;
     uart.ErrorCode=0; drop_ack=0; powered=rx_connected=1; corrupt_reply=nak=nak_port=ignore_port=ignore_message=ignore_rate=fail_tx=fail_init=short_reply=0;
+    sky_tracking=1; suppress_sky=nmea_bad_checksum=suppress_nmea=0; recovery_commands=recovery_command_tick=0;
     transmissions=port_sets=rate_polls=0; target=NULL; uart.Init.BaudRate=GPS_BOOT_BAUD;
     assert(GPS_Init(&uart)==HAL_OK);
 }
@@ -171,13 +189,31 @@ static void check_ready(void)
     const GPS_ConfigStatus *c=GPS_GetConfig();
     assert(c->state==GPS_CONFIG_READY && c->error==GPS_CFG_OK && c->baud==GPS_RUN_BAUD);
     assert(c->measurement_ms==200 && c->nav_rate==1 && c->time_ref==1 && rate_polls);
-    for (unsigned i=0;i<6;++i) assert(!message_rates[0][i]);
-    assert(message_rates[1][2]==1 && message_rates[1][0x12]==1 && message_rates[1][6]==1 && message_rates[1][0x21]==5);
+    for (unsigned i=0;i<6;++i) assert(message_rates[0][i]==(i==0 || i==4));
     assert(!strcmp(GPS_SoftwareVersion(),"7.03 TEST") && !strcmp(GPS_HardwareVersion(),"00040007"));
+}
+static void streaming(void)
+{
+    uint32_t start=tick;
+    while (GPS_GetConfig()->acquisition_only || !GPS_GetConfig()->pps_state) {
+        step(); assert((uint32_t)(tick-start)<4000U);
+    }
+    check_ready();
+    assert(message_rates[1][2]==1 && message_rates[1][0x12]==1 &&
+           message_rates[1][6]==1 && message_rates[1][0x21]==5);
+}
+static void run_ms(uint32_t duration)
+{
+    uint32_t start=tick;
+    while ((uint32_t)(tick-start)<duration) step();
 }
 int main(void)
 {
-    reset(GPS_BOOT_BAUD,0); until(GPS_CONFIG_READY,3000); check_ready(); assert(port_sets==1);
+    reset(GPS_BOOT_BAUD,0); no_fix_receiver=1;
+    until(GPS_CONFIG_READY,3000); check_ready(); assert(port_sets==1);
+    assert(GPS_GetConfig()->acquisition_only && !GPS_GetConfig()->pps_state);
+    assert(!message_rates[1][2] && !message_rates[1][0x12] && !message_rates[1][6] && !message_rates[1][0x21]);
+    no_fix_receiver=0; streaming();
     uint32_t last=GPS_GetData()->position_ms; unsigned updates=0;
     for (unsigned i=0;i<240;++i) {
         step();
@@ -232,7 +268,7 @@ int main(void)
     assert(GPS_GetConfig()->error==GPS_CFG_UART); fail_tx=0; until(GPS_CONFIG_READY,4000); check_ready();
     reset(GPS_BOOT_BAUD,0); fail_init=1; until(GPS_CONFIG_ERROR,1000);
     assert(GPS_GetConfig()->error==GPS_CFG_UART); until(GPS_CONFIG_READY,4000); check_ready();
-    reset(GPS_RUN_BAUD,UINT32_MAX-250U); short_reply=1; until(GPS_CONFIG_READY,3000); check_ready();
+    reset(GPS_RUN_BAUD,UINT32_MAX-250U); short_reply=1; until(GPS_CONFIG_READY,3000); check_ready(); streaming();
     /* Unknown binary payload containing a valid-looking NMEA sentence must be skipped. */
     const char body[]="GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,999.0,M,46.9,M,,";
     char fake[140]; unsigned sum=0; for (const char *p=body;*p;++p) sum^=(unsigned char)*p;
@@ -251,18 +287,68 @@ int main(void)
     powered=0; uint32_t outage=tick; while ((uint32_t)(tick-outage)<3500U) step();
     powered=1; receiver_baud=GPS_BOOT_BAUD; until(GPS_CONFIG_READY,6000);
     assert(gps_diag.uart_errors==13 && gps_diag.uart_first_us==first_error && gps_diag.uart_last_us==last_error);
-    reset(GPS_BOOT_BAUD,0); unsupported_pps=1; until(GPS_CONFIG_READY,3000);
+    reset(GPS_BOOT_BAUD,0); unsupported_pps=1; until(GPS_CONFIG_READY,3000); streaming();
     for (unsigned n=0;n<200;++n) step();
     assert(GPS_GetConfig()->state==GPS_CONFIG_READY && GPS_GetConfig()->pps_state==2 && GPS_GetData()->position_valid);
     reset(GPS_BOOT_BAUD,0); unsupported_diagnostics=no_fix_receiver=1; until(GPS_CONFIG_READY,3000);
     for (unsigned n=0;n<1200;++n) step();
     assert(diagnostic_polls>=4 && !(gps_diag.receiver.seen&60) && !GPS_GetData()->position_valid);
-    assert(GPS_GetConfig()->state==GPS_CONFIG_READY && GPS_GetConfig()->pps_state==1);
+    assert(GPS_GetConfig()->state==GPS_CONFIG_READY && !GPS_GetConfig()->pps_state && GPS_GetConfig()->acquisition_only);
     unsupported_diagnostics=0; fail_tx=1;
     for (unsigned n=0;n<240;++n) step();
-    assert(gps_diag.tx_errors && GPS_GetConfig()->state==GPS_CONFIG_READY && GPS_GetConfig()->pps_state==1);
+    assert(gps_diag.tx_errors && GPS_GetConfig()->state==GPS_CONFIG_READY && !GPS_GetConfig()->pps_state);
     fail_tx=0; hold_diagnostic_tx=1;
     for (unsigned n=0;n<240;++n) step();
-    assert(tx_aborts && GPS_GetConfig()->state==GPS_CONFIG_READY && GPS_GetConfig()->pps_state==1);
-    puts("PASS GPS config: UBX checksums/readback, 5Hz/38400, message rates, MCU/receiver restarts, missing RX, NAK, verification, UART faults and wrap");
+    assert(tx_aborts && GPS_GetConfig()->state==GPS_CONFIG_READY && !GPS_GetConfig()->pps_state);
+    /* Invalid/no-checksum fixes must not enable the binary stream or PPS. */
+    reset(GPS_BOOT_BAUD,0); no_fix_receiver=1; until(GPS_CONFIG_READY,3000); run_ms(2000);
+    assert(GPS_GetConfig()->acquisition_only && !GPS_GetConfig()->pps_state);
+    no_fix_receiver=0; nmea_bad_checksum=1; run_ms(2000);
+    assert(GPS_GetConfig()->acquisition_only && !message_rates[1][2]);
+    /* Embedded NMEA is binary payload, never a receiver fix. */
+    reply(1,0x99,(const uint8_t*)fake,strlen(fake)); GPS_Process(tick);
+    assert(GPS_GetConfig()->acquisition_only);
+    nmea_bad_checksum=0; suppress_nmea=1;
+    sentence("GPRMC,,A,");
+    GPS_Process(tick); assert(GPS_GetConfig()->acquisition_only);
+    sentence("GPGGA,123519,4807.038,N,01131.000,E,0,00,99.99,545.4,M,46.9,M,,");
+    GPS_Process(tick); assert(GPS_GetConfig()->acquisition_only);
+    /* RMC alone can indicate the first fix; don't require matching GGA. */
+    sentence("GPRMC,123519,A,4807.038,N,01131.000,E,22.4,84.4,041126,,,A");
+    GPS_Process(tick); assert(!GPS_GetData()->position_valid);
+    streaming(); run_ms(500);
+    assert(GPS_GetData()->position_valid);
+    /* GGA alone also starts streaming, without waiting for valid UTC/PPS. */
+    reset(GPS_BOOT_BAUD,0); no_fix_receiver=1; until(GPS_CONFIG_READY,3000);
+    suppress_nmea=1;
+    sentence("GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,");
+    GPS_Process(tick); assert(!GPS_GetData()->position_valid);
+    streaming(); run_ms(500); assert(!GPS_GetData()->position_valid);
+
+    /* No fix while tracking signals is not a wedged receiver. */
+    reset(GPS_BOOT_BAUD,0); no_fix_receiver=1; until(GPS_CONFIG_READY,3000); run_ms(130000);
+    assert(!recovery_commands && !gps_diag.recovery_attempts && GPS_GetConfig()->acquisition_only);
+    /* Missing/stale SVINFO is not evidence of zero signals. */
+    sky_tracking=0; run_ms(5000); suppress_sky=1; run_ms(130000);
+    assert(!recovery_commands && !gps_diag.recovery_attempts);
+    /* A valid receiver without PPS must never be restarted. */
+    reset(GPS_BOOT_BAUD,0); unsupported_pps=1; sky_tracking=0;
+    until(GPS_CONFIG_READY,3000); streaming(); run_ms(130000);
+    assert(GPS_GetData()->position_valid && !recovery_commands && !gps_diag.recovery_attempts);
+
+    /* Persistent fresh zero-signal reports get exactly one hot restart per boot. */
+    reset(GPS_BOOT_BAUD,0); no_fix_receiver=1; sky_tracking=0;
+    until(GPS_CONFIG_READY,3000); run_ms(115000);
+    assert(!recovery_commands && !gps_diag.recovery_attempts);
+    uint32_t deadline=tick;
+    while (!recovery_commands) { step(); assert((uint32_t)(tick-deadline)<15000U); }
+    assert(recovery_commands==1 && gps_diag.recovery_attempts==1);
+    assert(gps_diag.recovery_us==(uint64_t)recovery_command_tick*1000U);
+    unsigned sent=transmissions; run_ms(900); assert(transmissions==sent);
+    run_ms(3000); check_ready(); assert(GPS_GetConfig()->acquisition_only);
+    uint32_t epochs=gps_diag.epoch_count,nmea_count=gps_diag.nmea_sentences;
+    run_ms(250000); assert(recovery_commands==1 && gps_diag.recovery_attempts==1 && gps_diag.epoch_count>=epochs && gps_diag.nmea_sentences>nmea_count);
+    no_fix_receiver=0; streaming(); run_ms(1000);
+    assert(GPS_GetData()->position_valid && recovery_commands==1);
+    puts("PASS GPS config: legacy NMEA acquisition, UBX/PPS after fix, bounded GNSS hot recovery, checksums/readback, 5Hz/38400, message rates, MCU/receiver restarts, missing RX, NAK, verification, UART faults and wrap");
 }
