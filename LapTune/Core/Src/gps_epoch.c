@@ -178,7 +178,8 @@ void GPS_Epoch_Service(GPS_Data *d,uint64_t now)
         ++gps_diag.incomplete; publish(d,old,old->first_us+GPS_ASSEMBLY_DEADLINE_US);
     }
     if (d->position_valid && now>=last_valid_rx && now-last_valid_rx>=GPS_EPOCH_TIMEOUT_US) invalidate(d,now);
-    if ((uint32_t)((uint32_t)(now/1000U)-d->sentence_ms)>=3000U) d->connected=0;
+    if ((uint32_t)((uint32_t)(now/1000U)-d->sentence_ms)>=3000U)
+        d->connected=d->receiver_fix_valid=d->satellites=0;
     if ((uint32_t)((uint32_t)(now/1000U)-d->datetime_ms)>=3000U) d->datetime_valid=0;
 }
 void GPS_Epoch_ForWindow(uint64_t sample,uint64_t midpoint,GPS_Fix *out)

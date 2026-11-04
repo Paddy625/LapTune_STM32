@@ -41,7 +41,7 @@ static uint64_t no_signal_since;
    GPS_NMEA_Parse's stack frame (this runs inside the storage service hook). */
 static struct {
     char type[6];
-    uint8_t state,sum,check,field,length,fix,status;
+    uint8_t state,sum,check,field,length,fix,status,satellites,satellites_valid;
 } nmea;
 
 static uint8_t message_rate(void)
@@ -70,6 +70,13 @@ static void nmea_byte(uint8_t ch)
         uint64_t us=Timebase_NowUs();
         ++gps_diag.nmea_sentences; gps_diag.nmea_last_us=us;
         if (nmea.fix) { ++gps_diag.nmea_fix_sentences; gps_diag.nmea_last_fix_us=us; }
+        if (configuration.acquisition_only) {
+            /* NAV-SOL is disabled here. Display the actual receiver status
+               without publishing NMEA coordinates into the UBX log history. */
+            data.connected=1; data.sentence_ms=(uint32_t)(us/1000U);
+            data.receiver_fix_valid=nmea.fix;
+            if (nmea.type[2]=='G') data.satellites=nmea.satellites_valid ? nmea.satellites : 0;
+        }
         return;
     }
     if (ch=='*') { nmea.state=2; return; }
@@ -82,10 +89,16 @@ static void nmea_byte(uint8_t ch)
         } else if ((nmea.type[2]=='R' && nmea.field==2) || (nmea.type[2]=='G' && nmea.field==6)) {
             nmea.fix=nmea.length==1 && (nmea.type[2]=='R' ? nmea.status=='A' : (nmea.status>='1' && nmea.status<='5'));
         }
+        if (nmea.field==7 && !nmea.length) nmea.satellites_valid=0;
         if (++nmea.field>20) { nmea.state=0; return; }
+        if (nmea.field==7) nmea.satellites_valid=1;
         nmea.length=0; return;
     }
     if (!nmea.field && nmea.length<5) nmea.type[nmea.length]=(char)ch;
+    if (nmea.type[2]=='G' && nmea.field==7) {
+        if (ch>='0' && ch<='9' && nmea.length<2) nmea.satellites=(uint8_t)(nmea.satellites*10U+ch-'0');
+        else nmea.satellites_valid=0;
+    }
     nmea.status=ch;
     if (++nmea.length>100) nmea.state=0;
 }

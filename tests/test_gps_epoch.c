@@ -30,6 +30,7 @@ int main(void)
     epoch(1800,900000,7,3); GPS_Epoch_Service(&data,1702000); GPS_Epoch_ForSample(1702000,&a);
     assert(!a.position_valid && !data.position_valid);
     for (unsigned sec=5;sec<=20;sec+=5) { GPS_Epoch_Service(&data,900000+(uint64_t)sec*1000000); GPS_Epoch_ForSample(900000+(uint64_t)sec*1000000,&a); assert(!a.position_valid); }
+    assert(!data.connected && !data.receiver_fix_valid && !data.satellites);
     GPS_Epoch_ResetStream(&data,22000000); epoch(0,22100000,7,3); GPS_Epoch_ForSample(22102000,&a);
     assert(a.position_valid && a.fix_id>3); uint32_t id=a.fix_id;
     GPS_Epoch_ResetStream(&data,23000000); epoch(604799800,23100000,7,3);

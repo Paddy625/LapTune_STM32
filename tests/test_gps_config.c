@@ -213,6 +213,18 @@ int main(void)
     until(GPS_CONFIG_READY,3000); check_ready(); assert(port_sets==1);
     assert(GPS_GetConfig()->acquisition_only && !GPS_GetConfig()->pps_state);
     assert(!message_rates[1][2] && !message_rates[1][0x12] && !message_rates[1][6] && !message_rates[1][0x21]);
+    /* Before UBX starts, GGA is the only source of the live satellite count. */
+    suppress_nmea=1;
+    sentence("GPGGA,123519,,,,,0,04,99.99,,M,,M,,"); GPS_Process(tick);
+    assert(GPS_GetData()->satellites==4 && GPS_GetData()->connected && !GPS_GetData()->receiver_fix_valid);
+    assert(!GPS_GetData()->position_valid && !gps_diag.received_epochs);
+    nmea_bad_checksum=1;
+    sentence("GPGGA,123519,,,,,0,99,99.99,,M,,M,,"); GPS_Process(tick);
+    assert(GPS_GetData()->satellites==4);
+    nmea_bad_checksum=0;
+    sentence("GPGGA,123519,,,,,0,4x,99.99,,M,,M,,"); GPS_Process(tick);
+    assert(!GPS_GetData()->satellites);
+    suppress_nmea=0;
     no_fix_receiver=0; streaming();
     uint32_t last=GPS_GetData()->position_ms; unsigned updates=0;
     for (unsigned i=0;i<240;++i) {
@@ -315,14 +327,14 @@ int main(void)
     GPS_Process(tick); assert(GPS_GetConfig()->acquisition_only);
     /* RMC alone can indicate the first fix; don't require matching GGA. */
     sentence("GPRMC,123519,A,4807.038,N,01131.000,E,22.4,84.4,041126,,,A");
-    GPS_Process(tick); assert(!GPS_GetData()->position_valid);
+    GPS_Process(tick); assert(!GPS_GetData()->position_valid && GPS_GetData()->receiver_fix_valid);
     streaming(); run_ms(500);
     assert(GPS_GetData()->position_valid);
     /* GGA alone also starts streaming, without waiting for valid UTC/PPS. */
     reset(GPS_BOOT_BAUD,0); no_fix_receiver=1; until(GPS_CONFIG_READY,3000);
     suppress_nmea=1;
     sentence("GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,");
-    GPS_Process(tick); assert(!GPS_GetData()->position_valid);
+    GPS_Process(tick); assert(!GPS_GetData()->position_valid && GPS_GetData()->receiver_fix_valid && GPS_GetData()->satellites==8);
     streaming(); run_ms(500); assert(!GPS_GetData()->position_valid);
 
     /* No fix while tracking signals is not a wedged receiver. */

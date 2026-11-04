@@ -1,4 +1,5 @@
 #include "acc_display.h"
+#include "boot_identity.h"
 #include <stdio.h>
 
 static IMU_DisplayData snapshot;
@@ -26,7 +27,7 @@ HAL_StatusTypeDef AccDisplay_Init(void)
 {
     field = 0U; pending = 0U;
     last_refresh = HAL_GetTick() - 100U;
-    if (TFT_Text(4, 0, "LAPTUNE ALPHA", 2, TFT_RED, TFT_BLACK) != HAL_OK)
+    if (TFT_Text(4, 0, "LAPTUNE " LAPTUNE_FIRMWARE_VERSION, 2, TFT_RED, TFT_BLACK) != HAL_OK)
         return HAL_ERROR;
     return TFT_Text(4, 120, "ACC +/-16G GPS", 1, TFT_GREY, TFT_BLACK);
 }

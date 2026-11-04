@@ -1,4 +1,36 @@
-# Diagnostyka NO FIX — firmware 2.1.2
+# Diagnostyka NO FIX — firmware 2.1.3
+
+## Wersja programu i status na ekranie
+
+Od 2.1.3 nagłówek TFT pokazuje wersję, np. `LAPTUNE 2.1.3`.
+To wersja uruchomionego firmware; sama obecność zmian na GitHubie nie
+oznacza, że CubeIDE przebudowało i wgrało właściwy ELF. Potwierdzenie
+stanowią też `firmware_version` i `firmware_commit` w najnowszej sesji.
+Przesłana po aktualizacji sesja z około 814 s pracy nadal deklarowała
+2.1.1 / `112cbbf`, więc nie testowała zmian uruchamiania z 2.1.2.
+
+Naprawiono błąd 2.1.2: podczas profilu NMEA liczba satelitów na TFT
+czekała na wyłączony wtedy NAV-SOL i pozostawała zerowa. Teraz pochodzi
+z poprawnego checksum GGA; status fixa pochodzi z GGA/RMC. Gdy NMEA
+zgłasza fix, a spójna pozycja UBX jeszcze nie dotarła, ekran pokazuje
+`GPS FIX WAIT DATA`. Współrzędne logu nadal pochodzą wyłącznie z epok UBX.
+Po utracie komunikacji wygaszane są także status fixa i liczba satelitów.
+Ta poprawka usuwa mylący status; sama nie naprawia odbioru RF.
+
+Ponowne porównanie z `461c935` objęło zasoby sprzętowe:
+
+| Element | Wynik porównania |
+| --- | --- |
+| Zegar procesora i UART | HSI/PLL 64 MHz, USART3 8N1 9600/38400 bez zmiany |
+| Piny GPS | PB10 TX i PB11 RX bez zmiany |
+| Nowe wejścia | PPS PA0, DRDY PA1/PA4; nie pokrywają się z UART GPS |
+| DMA IMU | DMA1 kanały 4/5 dla SPI2; GPS odbierany przerwaniami UART, bez DMA |
+| SPI | Preskalery bez zmiany; ilość przesyłanych danych zmieniła się w P0 |
+
+Nie znaleziono konfliktu pinów ani polecenia wyłączającego odbiór
+satelitów. To nie wyklucza wpływu aktywności elektroniki na RF, ale
+nie stanowi też dowodu takiego wpływu. Brak fixa w sesji 2.1.1 nie
+potwierdza skuteczności ani nieskuteczności zmian od 2.1.2.
 
 `GPS NO FIX 5HZ S:00` oznacza zweryfikowaną konfigurację 5 Hz i brak
 satelitów użytych w rozwiązaniu. Liczba S nie określa liczby odbieranych
@@ -127,8 +159,11 @@ nie oznacza jeszcze fixa, zakończenia etapu NMEA ani lock PPS.
 
 ## Sprawdzenie aktualizacji
 
-1. Pobierz `main`, wykonaj Clean/Build w CubeIDE i wgraj **2.1.2**.
-   Archiwalny HEX 2.1.1 nie zawiera tych zmian.
+1. Pobierz `main`, wykonaj Clean/Build w CubeIDE i wgraj **2.1.3**.
+   Na TFT musi być `LAPTUNE 2.1.3`. Archiwalny HEX 2.1.1 nie zawiera tych zmian.
+   Jeśli wersja na TFT jest starsza, sprawdź w Debug Configurations →
+   C/C++ Application, czy ELF pochodzi z aktualnie budowanego projektu
+   (`LapTune/Debug/LapTune.elf` albo odpowiedniej konfiguracji Release).
 2. Po próbie naciśnij B1 i zaczekaj na `SD SAVED`. Zachowaj najnowszy
    `SESSION.json` i ostatni plik TXT. Sprawdź wersję oraz `snapshot_t_us`;
    przy kontrolowanym zatrzymaniu oczekiwane jest `clean_shutdown=true`.
