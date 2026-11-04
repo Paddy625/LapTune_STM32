@@ -10,6 +10,8 @@
 #define GPS_MEASUREMENT_MS 200U
 typedef enum { GPS_CONFIG_PENDING, GPS_CONFIG_READY, GPS_CONFIG_ERROR } GPS_ConfigState;
 typedef enum { GPS_CFG_OK, GPS_CFG_NO_RESPONSE, GPS_CFG_NAK, GPS_CFG_VERIFY, GPS_CFG_UART } GPS_ConfigError;
+typedef enum { GPS_RESTORE_NONE, GPS_RESTORE_PENDING, GPS_RESTORE_DEFAULTS_SENT,
+               GPS_RESTORE_COLD_SENT, GPS_RESTORE_RECONFIGURED, GPS_RESTORE_FAILED } GPS_RestoreState;
 typedef struct {
     GPS_ConfigState state;
     GPS_ConfigError error;
@@ -18,9 +20,12 @@ typedef struct {
     uint8_t message_id,attempts;
     uint8_t pps_state,pps_error; /* pending=0, verified=1, unavailable/error=2 */
     uint8_t acquisition_only; /* legacy GGA/RMC startup; UBX/PPS enabled after first fix */
+    uint8_t restore_state,restore_error,restore_ack;
 } GPS_ConfigStatus;
 
 HAL_StatusTypeDef GPS_Init(UART_HandleTypeDef *uart);
+/* Call once immediately after Init, only with a persistent reservation. */
+void GPS_RequestRestore(void);
 void GPS_OnRxComplete(UART_HandleTypeDef *uart);
 void GPS_OnTxComplete(UART_HandleTypeDef *uart);
 void GPS_DiagnosticsSnapshot(GPS_Diagnostics *out);

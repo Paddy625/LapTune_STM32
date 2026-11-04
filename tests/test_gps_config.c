@@ -13,6 +13,8 @@ static int powered,rx_connected,corrupt_reply,nak,nak_port,ignore_port,ignore_me
 static int drop_ack,unsupported_pps,unsupported_diagnostics,no_fix_receiver,hold_diagnostic_tx;
 static unsigned diagnostic_polls;
 static unsigned tx_aborts,recovery_commands;
+static unsigned defaults_commands;
+static int allow_restore,restore_nak,restore_keep_baud;
 static int sky_tracking,suppress_sky,nmea_bad_checksum,suppress_nmea;
 static uint8_t pulse_configuration[20];
 static unsigned transmissions,port_sets,rate_polls;
@@ -89,6 +91,17 @@ HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *handle,const uint8_t 
     const uint8_t *payload=p+6;
     if (nak && p[3]==1 && size==3) { const uint8_t n[]={6,1}; reply(5,0,n,2); return HAL_OK; }
     switch (p[3]) {
+    case 9: {
+        static const uint8_t expected[]={255,255,0,0,0,0,0,0,255,255,0,0,0x17};
+        assert(allow_restore && size==13 && !memcmp(payload,expected,13));
+        ++defaults_commands;
+        if (restore_nak) { const uint8_t n[]={6,9}; reply(5,0,n,2); break; }
+        /* Default-load ACK is intentionally lost with the UART change. */
+        if (!restore_keep_baud) receiver_baud=GPS_BOOT_BAUD;
+        measurement=1000; memset(message_rates,0,sizeof(message_rates));
+        for (unsigned i=0;i<6;++i) message_rates[0][i]=1;
+        break;
+    }
     case 0:
         if (size==1) {
             assert(payload[0]==1);
@@ -117,7 +130,9 @@ HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *handle,const uint8_t 
         break;
     case 4:
         ++recovery_commands;
-        assert(!"NO FIX must never cause a GNSS reset");
+        assert(allow_restore && defaults_commands==1 && size==4);
+        assert(payload[0]==255 && payload[1]==255 && payload[2]==1 && payload[3]==0);
+        receiver_baud=GPS_BOOT_BAUD; /* Full reset, no ACK. */
         break;
     case 7:
         if (unsupported_pps) { const uint8_t n[]={6,7}; reply(5,0,n,2); break; }
@@ -173,6 +188,7 @@ static void reset(uint32_t baud,uint32_t start)
     unsupported_pps=unsupported_diagnostics=no_fix_receiver=hold_diagnostic_tx=0; diagnostic_polls=tx_aborts=0;
     uart.ErrorCode=0; drop_ack=0; powered=rx_connected=1; corrupt_reply=nak=nak_port=ignore_port=ignore_message=ignore_rate=fail_tx=fail_init=short_reply=0;
     sky_tracking=1; suppress_sky=nmea_bad_checksum=suppress_nmea=0; recovery_commands=0;
+    defaults_commands=0; allow_restore=restore_nak=restore_keep_baud=0;
     transmissions=port_sets=rate_polls=0; target=NULL; uart.Init.BaudRate=GPS_BOOT_BAUD;
     assert(GPS_Init(&uart)==HAL_OK);
 }
@@ -354,5 +370,38 @@ int main(void)
     assert(GPS_GetConfig()->acquisition_only && gps_diag.nmea_sentences>8000);
     no_fix_receiver=0; streaming(); run_ms(1000);
     assert(GPS_GetData()->position_valid && !recovery_commands);
-    puts("PASS GPS config: legacy NMEA acquisition, UBX/PPS after fix, uninterrupted cold acquisition, checksums/readback, 5Hz/38400, message rates, MCU/receiver restarts, missing RX, NAK, verification, UART faults and wrap");
+    /* Explicit, persistently reserved repair: defaults first, cold reset second.
+       Test both discovered baud rates and loss of ACK during default loading. */
+    for (unsigned keep=0;keep<2;++keep) {
+        reset(keep ? GPS_RUN_BAUD : GPS_BOOT_BAUD,0);
+        allow_restore=1; restore_keep_baud=keep; no_fix_receiver=1; sky_tracking=0;
+        GPS_RequestRestore(); GPS_RequestRestore();
+        until(GPS_CONFIG_READY,10000); check_ready();
+        assert(GPS_GetConfig()->restore_state==GPS_RESTORE_RECONFIGURED);
+        assert(!GPS_GetConfig()->restore_ack && defaults_commands==1 && recovery_commands==1);
+        run_ms(900000);
+        assert(defaults_commands==1 && recovery_commands==1 && gps_diag.recovery_attempts==1);
+        powered=0; run_ms(5000); powered=1; until(GPS_CONFIG_READY,10000);
+        assert(defaults_commands==1 && recovery_commands==1);
+        no_fix_receiver=0; streaming(); run_ms(1000); assert(GPS_GetData()->position_valid);
+        /* MCU restart without another reservation: keep the receiver acquiring. */
+        assert(GPS_Init(&uart)==HAL_OK); until(GPS_CONFIG_READY,5000);
+        assert(GPS_GetConfig()->restore_state==GPS_RESTORE_NONE);
+        assert(defaults_commands==1 && recovery_commands==1);
+    }
+    reset(GPS_RUN_BAUD,UINT32_MAX-1000U); allow_restore=1; GPS_RequestRestore();
+    until(GPS_CONFIG_READY,10000); assert(defaults_commands==1 && recovery_commands==1);
+    reset(GPS_RUN_BAUD,0); allow_restore=restore_nak=1; GPS_RequestRestore();
+    until(GPS_CONFIG_ERROR,3000);
+    assert(GPS_GetConfig()->restore_state==GPS_RESTORE_FAILED && GPS_GetConfig()->restore_error==GPS_CFG_NAK);
+    run_ms(15000); assert(defaults_commands==1 && !recovery_commands);
+    reset(GPS_BOOT_BAUD,0); allow_restore=1; powered=0; GPS_RequestRestore();
+    until(GPS_CONFIG_ERROR,3000); assert(GPS_GetConfig()->restore_state==GPS_RESTORE_FAILED);
+    powered=1; run_ms(15000); assert(!defaults_commands && !recovery_commands);
+    /* TX failure cannot silently rearm defaults or cold start. */
+    reset(GPS_BOOT_BAUD,0); allow_restore=1; GPS_RequestRestore();
+    step(); fail_tx=1; step(); fail_tx=0;
+    assert(GPS_GetConfig()->restore_state==GPS_RESTORE_FAILED);
+    run_ms(15000); assert(!defaults_commands && !recovery_commands);
+    puts("PASS GPS config: one-time defaults/cold start, baud changes, lost ACK, NAK/TX/missing receiver, no reset loop, NMEA/UBX/PPS, readback and uninterrupted acquisition");
 }

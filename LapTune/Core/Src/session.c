@@ -84,7 +84,9 @@ FRESULT Session_Write(const char *dir)
     if (r==FR_OK) r=number64(&f,"gps_nmea_last_fix_us",gps.nmea_last_fix_us);
     WRITE("  \"gps_recovery_attempts\": %lu,\n",(unsigned long)gps.recovery_attempts);
     if (r==FR_OK) r=number64(&f,"gps_recovery_us",gps.recovery_us);
-    STR("gps_recovery_reason","disabled: NO FIX never resets GNSS; acquisition runs without a timeout");
+    STR("gps_recovery_reason","2.1.5 one-time reserved cold-start TX attempt only; NO FIX never triggers a reset");
+    WRITE("  \"gps_restore_state\": %u, \"gps_restore_error\": %u, \"gps_restore_ack\": %u,\n",c->restore_state,c->restore_error,c->restore_ack);
+    STR("gps_restore_states","0=not requested this boot,1=pending,2=defaults TX,3=cold TX,4=5Hz reconfigured,5=failed; 4 is not RF/fix or factory-state verification");
     WRITE("  \"gps_min_period_ms\": %lu, \"gps_max_period_ms\": %lu, \"gps_history_misses\": %lu,\n",(unsigned long)gps.min_period_ms,(unsigned long)gps.max_period_ms,(unsigned long)gps.history_misses);
     const GPS_ReceiverStatus *rx=&gps.receiver;
     WRITE("  \"gps_receiver_seen\": %u, \"gps_sol_fix_type\": %u, \"gps_sol_flags\": %u,\n",rx->seen,rx->fix_type,rx->sol_flags);

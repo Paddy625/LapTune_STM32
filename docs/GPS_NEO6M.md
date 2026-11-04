@@ -1,4 +1,6 @@
-# GPS u-blox NEO-6M — firmware 2.1.4
+# GPS u-blox NEO-6M — firmware 2.1.5
+
+**2.1.5:** [jednorazowe przywrócenie GPS i instrukcja próby](GPS_RESTORE.md).
 
 Moduł GY-NEO6MV2 komunikuje się przez USART3. Zasilanie podaj według
 specyfikacji konkretnego breakouta; poziomy UART przy STM32 muszą wynosić

@@ -1,6 +1,6 @@
 # LapTune_STM32
 
-Firmware loggera STM32. **2.1.4: GPS bez automatycznych restartów, odczyt i ekran IMU także bez karty SD** ([szczegóły](docs/GPS_DIAGNOSTICS.md)). **[Synchronizacja GPS–IMU przez PPS](docs/GPS_PPS.md)**. **P0: [format danych, DRDY i instrukcja wgrania](docs/P0_LOGGER.md)**.
+Firmware loggera STM32. **2.1.5: jednorazowe przywrócenie ustawień GPS i zimny start** ([przebieg próby](docs/GPS_RESTORE.md)). Odczyt IMU działa także bez SD. **[Synchronizacja GPS–IMU przez PPS](docs/GPS_PPS.md)**. **P0: [format danych, DRDY i instrukcja wgrania](docs/P0_LOGGER.md)**.
 **Przegląd P0 i diagnostyka:** [raport zmian](docs/P0_REVIEW_2026-11-02.md).
 Wymagane przewody: **INT1 → PA1 (A1), INT2 → PA4 (A2)**. PPS GPS: **PA0 (A0)**.
 
@@ -14,7 +14,7 @@ Firmware konfiguruje **5 Hz, UART 38400 baud**, z automatycznym rozpoznaniem
 po ważnym fixie włącza spójne epoki UBX i PPS. Zapis IMU działa niezależnie
 od fixa. Brak fixa ani zerowe C/N₀ nie wywołują restartu GPS. Do konfiguracji wymagane jest **PB10 → RX GPS**.
 Aktualizację pobierz z `main`, wykonaj Clean/Build i wgraj w CubeIDE.
-Nagłówek TFT pokazuje **LAPTUNE 2.1.4** — sprawdź go po wgraniu.
+Nagłówek TFT pokazuje **LAPTUNE 2.1.5** — sprawdź go po wgraniu.
 [Archiwum HEX 2.1.1](firmware/README.md) dotyczy poprzedniej wersji, nie aktualnego kodu.
 
 Logger **microSD na SPI1 wspólnym z TFT**: [połączenia i format TXT](docs/SD_LOGGING.md).

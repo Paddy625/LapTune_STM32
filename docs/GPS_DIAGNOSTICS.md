@@ -1,6 +1,13 @@
-# Diagnostyka NO FIX — firmware 2.1.4
+# Diagnostyka NO FIX — firmware 2.1.5
 
-## Aktualna wersja 2.1.4
+## Aktualna wersja 2.1.5
+
+Dodano [jednorazowe przywrócenie konfiguracji i zimny start](GPS_RESTORE.md),
+z trwałą rezerwacją w Nucleo. Brak fixa nadal nie wywołuje resetów.
+Pola `gps_recovery_attempts/us` oznaczają teraz tę zleconą próbę,
+a jej etapy opisuje `gps_restore_state`. Poniżej historia diagnostyki.
+
+## Wersja 2.1.4
 
 Usunięto automatyczny restart GNSS po braku śledzenia. Odbiornik może
 szukać fixa bez limitu czasu, przy działającym IMU, TFT i zapisie SD.
@@ -167,8 +174,8 @@ po uzyskaniu fixa, kiedy dalsze odpytywanie ustaje.
 | gps_nmea_fix_sentences | licznik takich zdań zgłaszających ważny fix; również nie licznik unikalnych epok |
 | gps_nmea_last_us | czas przetworzenia ostatniego poprawnego zdania NMEA w skali MCU |
 | gps_nmea_last_fix_us | czas przetworzenia ostatniego zdania NMEA z ważnym fixem w skali MCU |
-| gps_recovery_attempts | pole zachowane dla zgodności; od 2.1.4 zawsze 0, brak automatycznych restartów GNSS |
-| gps_recovery_us | historyczny czas próby restartu; od 2.1.4 zawsze 0 |
+| gps_recovery_attempts | w 2.1.4 zawsze 0; w 2.1.5 liczba prób wysłania jednorazowego cold startu (0 lub 1), patrz GPS_RESTORE.md |
+| gps_recovery_us | czas próby restartu; w 2.1.4 zawsze 0, w 2.1.5 czas jednorazowego cold startu |
 
 `gps_received_epochs`, `gps_valid_epochs` i `gps_invalid_fixes` nadal
 liczą epoki UBX. Podczas oczekiwania w profilu GGA/RMC mogą pozostawać
@@ -181,8 +188,8 @@ nie oznacza jeszcze fixa, zakończenia etapu NMEA ani lock PPS.
 
 ## Sprawdzenie aktualizacji
 
-1. Pobierz `main`, wykonaj Clean/Build w CubeIDE i wgraj **2.1.4**.
-   Na TFT musi być `LAPTUNE 2.1.4`. Archiwalny HEX 2.1.1 nie zawiera tych zmian.
+1. Pobierz `main`, wykonaj Clean/Build w CubeIDE i wgraj **2.1.5**.
+   Na TFT musi być `LAPTUNE 2.1.5`. Archiwalny HEX 2.1.1 nie zawiera tych zmian.
    Jeśli wersja na TFT jest starsza, sprawdź w Debug Configurations →
    C/C++ Application, czy ELF pochodzi z aktualnie budowanego projektu
    (`LapTune/Debug/LapTune.elf` albo odpowiedniej konfiguracji Release).

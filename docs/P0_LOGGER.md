@@ -1,6 +1,6 @@
 # Kontrakt loggera 2.1.0 (P0 + mapowanie PPS)
 
-**Aktualne zmiany 2.1.4:** [GPS bez automatycznych restartów i IMU bez SD](GPS_DIAGNOSTICS.md). [Mapowanie PPS](GPS_PPS.md). Historyczny przegląd P0: [P0_REVIEW_2026-11-02.md](P0_REVIEW_2026-11-02.md).
+**Aktualne zmiany 2.1.5:** [Jednorazowe przywrócenie GPS](GPS_RESTORE.md). Zmiany 2.1.4: [GPS bez automatycznych restartów i IMU bez SD](GPS_DIAGNOSTICS.md). [Mapowanie PPS](GPS_PPS.md). Historyczny przegląd P0: [P0_REVIEW_2026-11-02.md](P0_REVIEW_2026-11-02.md).
 
 P0 wprowadza niezależny czas IMU, rzeczywiste zdarzenia DRDY, spójne epoki
 UBX, osobne sesje uruchomień i diagnostykę braków. Zachowuje **104 Hz,

@@ -15,6 +15,11 @@ HAL_StatusTypeDef GPSDisplay_Update(uint32_t now, const GPS_Data *data,const GPS
         char text[32],padded[26]; uint8_t valid=1;
         switch (row) {
         case 0:
+            if (has_config && config_snapshot.restore_state>=GPS_RESTORE_PENDING &&
+                config_snapshot.restore_state<=GPS_RESTORE_COLD_SENT) {
+                (void)snprintf(text,sizeof(text),"GPS RESTORE %u/3",config_snapshot.restore_state);
+                valid=0; break;
+            }
             if (!snapshot.connected && has_config && config_snapshot.state!=GPS_CONFIG_READY) {
                 (void)snprintf(text,sizeof(text),"GPS %s",config_snapshot.state==GPS_CONFIG_ERROR ? "CFG ERROR" : "SETUP");
                 valid=0; break;

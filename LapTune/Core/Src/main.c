@@ -192,6 +192,7 @@ int main(void)
     Error_Handler();
   }
   if (GPS_Init(&huart3) != HAL_OK) Error_Handler();
+  if (BootIdentity_TakeGPSRestore()) GPS_RequestRestore();
   app_ready=1; /* GPS RX/configuration can be serviced during initial SD setup. */
   SD_SPI_Bind(&hspi1);
   SDLogger_Start(); /* Prepare and sync the file before arming acquisition. */

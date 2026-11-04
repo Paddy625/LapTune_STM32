@@ -29,5 +29,8 @@ int main(void)
     GPSDisplay_Update(800,&d,&c); starts(0,"GPS FIX S:09"); /* Config error must not impersonate RF loss. */
     d.connected=0; GPSDisplay_Update(1000,&d,&c); starts(0,"GPS CFG ERROR");
     d.connected=1; d.time_sync_state=d.datetime_valid=1; GPSDisplay_Update(1200,&d,NULL); starts(4,"UTC PPS 00:00:00");
+    c.restore_state=GPS_RESTORE_PENDING; GPSDisplay_Update(1400,&d,&c); starts(0,"GPS RESTORE 1/3");
+    c.restore_state=GPS_RESTORE_COLD_SENT; GPSDisplay_Update(1600,&d,&c); starts(0,"GPS RESTORE 3/3");
+    c.restore_state=GPS_RESTORE_RECONFIGURED; GPSDisplay_Update(1800,&d,&c); starts(0,"GPS FIX S:09");
     puts("PASS GPS UI: complete snapshot frame, RF/data/config distinction, PPS label, clearing and 5Hz");
 }

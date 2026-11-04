@@ -16,7 +16,8 @@ static volatile uint8_t restart_rx, overflow;
 static GPS_Data data;
 static GPS_ConfigStatus configuration;
 typedef enum { DISCOVER_SEND, DISCOVER_WAIT, PORT_SET, SWITCH_WAIT,
-               INFO_SEND,INFO_WAIT,SETTING_SEND, SETTING_DELAY, SETTING_WAIT, ACQUIRE, CONFIG_DONE, CONFIG_RETRY } Phase;
+               INFO_SEND,INFO_WAIT,SETTING_SEND, SETTING_DELAY, SETTING_WAIT, ACQUIRE, CONFIG_DONE, CONFIG_RETRY,
+               RESTORE_DEFAULTS, RESTORE_DEFAULTS_WAIT, RESTORE_COLD, RESTORE_COLD_WAIT } Phase;
 static Phase phase;
 static uint32_t phase_ms;
 static uint8_t probe,probes,setting,attempt,port_attempts,setting_ack,pulse_loaded;
@@ -126,6 +127,9 @@ static void receiver_status(uint64_t us)
 }
 static void config_error(GPS_ConfigError reason,uint32_t now)
 {
+    if (configuration.restore_state>=GPS_RESTORE_PENDING && configuration.restore_state<=GPS_RESTORE_COLD_SENT) {
+        configuration.restore_state=GPS_RESTORE_FAILED; configuration.restore_error=reason;
+    }
     if (!configuration.acquisition_only && setting>=PULSE_SETTING && configuration.state==GPS_CONFIG_READY) {
         configuration.pps_state=2; configuration.pps_error=reason;
         phase=CONFIG_DONE; phase_ms=now; return;
@@ -183,6 +187,12 @@ static void packet_received(uint32_t now)
     GPS_Epoch_Service(&data,us);
     GPS_Epoch_Packet(&data,ubx_class,ubx_id,ubx_payload,ubx_length,us);
     receiver_status(us);
+    if (ubx_class==5 && ubx_length==2 && ubx_payload[0]==6 &&
+        ((phase==RESTORE_DEFAULTS_WAIT && ubx_payload[1]==9) ||
+         (phase==RESTORE_COLD_WAIT && ubx_payload[1]==4))) {
+        if (ubx_id==0) { config_error(GPS_CFG_NAK,now); return; }
+        if (ubx_id==1) configuration.restore_ack|=ubx_payload[1]==9 ? 1U : 2U;
+    }
     if (ubx_class==0x0D && ubx_id==1 && configuration.pps_state==1)
         GPS_Time_PulseMessage(ubx_payload,ubx_length,us);
     if (ubx_class==0x0A && ubx_id==4 && ubx_length>=40) {
@@ -202,6 +212,8 @@ static void packet_received(uint32_t now)
     if (phase==DISCOVER_WAIT && ubx_id==0 && ubx_length==20 && ubx_payload[0]==1) {
         if (le32(ubx_payload+8)!=gps_uart->Init.BaudRate) return;
         memcpy(port_config,ubx_payload,sizeof(port_config));
+        if (configuration.restore_state==GPS_RESTORE_PENDING) { phase=RESTORE_DEFAULTS; return; }
+        if (configuration.restore_state==GPS_RESTORE_DEFAULTS_SENT) { phase=RESTORE_COLD; return; }
         if (configuration.baud==GPS_RUN_BAUD && (le16(port_config+12)&3U)==3U &&
             (le16(port_config+14)&3U)==3U) {
             setting=attempt=0; phase=INFO_SEND;
@@ -221,6 +233,8 @@ static void packet_received(uint32_t now)
                 config_error(GPS_CFG_VERIFY,now); return;
             }
             configuration.state=GPS_CONFIG_READY; configuration.error=GPS_CFG_OK;
+            if (configuration.restore_state==GPS_RESTORE_COLD_SENT)
+                configuration.restore_state=GPS_RESTORE_RECONFIGURED;
         } else if (setting==PULSE_SETTING && ubx_id==7 && ubx_length==20) {
             if (!pulse_loaded) {
                 /* Preserve antenna/RF/user delays and undocumented legacy flags. */
@@ -277,6 +291,32 @@ static void configure(uint32_t now)
     static const uint8_t rate[]={0xC8,0,1,0,1,0}; /* 200 ms, every cycle, GPS time. */
     HAL_StatusTypeDef result=HAL_OK;
     switch (phase) {
+    case RESTORE_DEFAULTS: {
+        /* UBX-CFG-CFG: clear and load defaults, never save our active config.
+           BBR, Flash, EEPROM, SPI Flash where supported; UART may change NOW. */
+        static const uint8_t defaults[]={0xFF,0xFF,0,0, 0,0,0,0, 0xFF,0xFF,0,0, 0x17};
+        configuration.restore_state=GPS_RESTORE_DEFAULTS_SENT;
+        phase=RESTORE_DEFAULTS_WAIT; phase_ms=now;
+        result=send_ubx(9,defaults,sizeof(defaults)); break;
+    }
+    case RESTORE_COLD: {
+        /* Cold start (all navigation BBR invalidated), controlled full reset.
+           No automatic resend: a lost ACK must not restart acquisition twice. */
+        static const uint8_t cold[]={0xFF,0xFF,1,0};
+        configuration.restore_state=GPS_RESTORE_COLD_SENT;
+        phase=RESTORE_COLD_WAIT; phase_ms=now;
+        ++gps_diag.recovery_attempts; gps_diag.recovery_us=Timebase_NowUs();
+        result=send_ubx(4,cold,sizeof(cold)); break;
+    }
+    case RESTORE_DEFAULTS_WAIT:
+    case RESTORE_COLD_WAIT:
+        /* ACK can disappear with the port change/reset. Rediscover the real
+           baud via CFG-PRT, then verify normal configuration by readback. */
+        if (!tx_busy && (uint32_t)(now-phase_ms)>=1500U) {
+            if (!change_baud(GPS_BOOT_BAUD)) config_error(GPS_CFG_UART,now);
+            else discover();
+        }
+        break;
     case DISCOVER_SEND: {
         uint8_t port=1; configuration.message_id=0;
         result=send_ubx(0,&port,1); phase=DISCOVER_WAIT; phase_ms=now; break;
@@ -374,6 +414,12 @@ HAL_StatusTypeDef GPS_Init(UART_HandleTypeDef *uart)
     memset(&configuration,0,sizeof(configuration)); configuration.baud=uart->Init.BaudRate;
     ubx_state=0; discover();
     return HAL_UART_Receive_IT(gps_uart, &rx_byte, 1U);
+}
+
+void GPS_RequestRestore(void)
+{
+    if (gps_uart && phase==DISCOVER_SEND && configuration.restore_state==GPS_RESTORE_NONE)
+        configuration.restore_state=GPS_RESTORE_PENDING;
 }
 
 void GPS_OnRxComplete(UART_HandleTypeDef *uart)
