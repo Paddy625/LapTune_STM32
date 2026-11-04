@@ -30,7 +30,7 @@ extern SDLogger_Diagnostics sd_diag;
 void SDLogger_Start(void);
 uint8_t SDLogger_Ready(void);
 unsigned SDLogger_RecordBytes(void);
-uint8_t SDLogger_StartAcquisition(uint8_t already_started);
+uint8_t Logger_StartAcquisition(void); /* Independent of SD readiness. */
 void SDLogger_ConsumeImu(void); /* Single foreground consumer; never called from SD I/O. */
 uint8_t SDLogger_CanAccept(void);
 uint8_t SDLogger_ShouldWait(uint64_t sample_us);

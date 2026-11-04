@@ -210,9 +210,10 @@ void SDLogger_DataLoss(void)
 }
 uint8_t SDLogger_Ready(void) { return opened && sd_log_state==LOG_RECORDING && automatic_enabled && !stop_requested; }
 uint8_t SDLogger_CanAccept(void)
-{ return (opened && sd_log_state==LOG_RECORDING) ? count<CAPACITY : !automatic_enabled; }
+{ return (opened && sd_log_state==LOG_RECORDING) ? count<CAPACITY : 1; }
 uint8_t SDLogger_ShouldWait(uint64_t t)
 {
+    if (!opened || sd_log_state!=LOG_RECORDING) return 0;
     if (!automatic_enabled && (sd_log_state!=LOG_RECORDING || t>stop_at_us)) return 0;
     uint64_t now=Timebase_NowUs(); return now<t || now-t<SD_LOG_HOLDBACK_US;
 }
@@ -225,7 +226,13 @@ uint8_t SDLogger_AppendRaw(const ImuRecord *record,LogTime time)
         ++sd_log_dropped; sd_diag.last_drop_nr=record->nr; sd_diag.last_drop_reason=5;
         sd_diag.last_drop_us=Timebase_NowUs(); return 1;
     }
-    if (!opened || sd_log_state!=LOG_RECORDING || count==CAPACITY) return 0; /* Caller retains ownership. */
+    if (!opened || sd_log_state!=LOG_RECORDING) {
+        /* Drain live acquisition while storage is unavailable. Otherwise the
+           raw ring fills with old samples and even the live TFT freezes. */
+        ++sd_log_dropped; sd_diag.last_drop_nr=record->nr; sd_diag.last_drop_reason=8;
+        sd_diag.last_drop_us=Timebase_NowUs(); return 1;
+    }
+    if (count==CAPACITY) return 0; /* Healthy SD backpressure: caller retains ownership. */
     queue[head].imu=*record; queue[head].time=time;
     ImuRecord next;
     uint64_t midpoint=record->t_us;

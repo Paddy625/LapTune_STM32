@@ -12,9 +12,9 @@ void SDLogger_ConsumeImu(void)
     }
 }
 
-uint8_t SDLogger_StartAcquisition(uint8_t already_started)
+uint8_t Logger_StartAcquisition(void)
 {
-    if (!already_started && !SDLogger_Ready()) return 0;
+    /* The sensor and live display must also work without a writable card. */
     if (!LSM6DS3_Init()) return 0;
     HAL_Delay(100U);
     return ImuStream_Start();

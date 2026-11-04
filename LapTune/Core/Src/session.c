@@ -84,7 +84,7 @@ FRESULT Session_Write(const char *dir)
     if (r==FR_OK) r=number64(&f,"gps_nmea_last_fix_us",gps.nmea_last_fix_us);
     WRITE("  \"gps_recovery_attempts\": %lu,\n",(unsigned long)gps.recovery_attempts);
     if (r==FR_OK) r=number64(&f,"gps_recovery_us",gps.recovery_us);
-    STR("gps_recovery_reason","120 s fresh zero-CNO/no-code-lock; at most one GNSS hot restart per MCU boot; BBR preserved");
+    STR("gps_recovery_reason","disabled: NO FIX never resets GNSS; acquisition runs without a timeout");
     WRITE("  \"gps_min_period_ms\": %lu, \"gps_max_period_ms\": %lu, \"gps_history_misses\": %lu,\n",(unsigned long)gps.min_period_ms,(unsigned long)gps.max_period_ms,(unsigned long)gps.history_misses);
     const GPS_ReceiverStatus *rx=&gps.receiver;
     WRITE("  \"gps_receiver_seen\": %u, \"gps_sol_fix_type\": %u, \"gps_sol_flags\": %u,\n",rx->seen,rx->fix_type,rx->sol_flags);
@@ -113,7 +113,7 @@ FRESULT Session_Write(const char *dir)
     uint8_t raw_later=imu.last_drop_us>=sd.last_drop_us;
     WRITE("  \"last_drop_nr\": %lu, \"last_drop_reason\": %lu,\n",(unsigned long)(raw_later ? imu.last_drop_nr : sd.last_drop_nr),(unsigned long)(raw_later ? imu.last_drop_reason : sd.last_drop_reason));
     U64("last_drop_us",raw_later ? imu.last_drop_us : sd.last_drop_us);
-    STR("drop_reasons","0=none,1=arming_discard,2=raw_ring_full,3=missed_DRDY,5=explicit_pause,7=uncertain_write_batch");
+    STR("drop_reasons","0=none,1=arming_discard,2=raw_ring_full,3=missed_DRDY,5=explicit_pause,7=uncertain_write_batch,8=storage_unavailable");
     STR("sd_written_semantics","records accepted by f_write; sd_synced_records counts successful data f_sync/f_close; no power-fail guarantee");
     WRITE("  \"sd_mount_attempts\": %lu, \"sd_failures\": %lu, \"sd_first_error_code\": %lu, \"sd_last_error_code\": %lu,\n",(unsigned long)sd.mount_attempts,(unsigned long)sd.init_failures,(unsigned long)sd.first_error_code,(unsigned long)sd.last_error_code);
     U64("sd_first_error_us",sd.first_error_us); U64("sd_last_error_us",sd.last_error_us);

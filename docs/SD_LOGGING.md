@@ -33,8 +33,17 @@ systemu plików na nowo włożonej karcie.
 
 DRDY i SPI2 DMA działają także podczas SD/TFT. Pierścień 255 rekordów
 przechowuje około 2,45 s IMU przy 104 Hz. Kolejka zapisu ma 16 rekordów; jej zapełnienie zatrzymuje pobieranie z pierścienia.
-Na mapowanie GPS próbki czekają 700 ms w tym samym pierścieniu; [opis PPS i budżet opóźnień](GPS_PPS.md). Przed pierwszym uzbrojeniem IMU wymagany jest przygotowany plik SD. Brak fixa
-lub UTC nie zatrzymuje zapisu. Szczegóły diagnostyki startu i pamięci:
+Na mapowanie GPS próbki czekają 700 ms w tym samym pierścieniu; [opis PPS i budżet opóźnień](GPS_PPS.md). Przy starcie podejmowana jest próba przygotowania pliku SD przed uzbrojeniem IMU.
+Od 2.1.4 brak karty lub błąd tej próby nie blokuje sensora i wyświetlacza.
+Bez dostępnego zapisu próbki są przekazywane do widoku i opróżniane z RAM;
+`SD_QUEUE_DROPPED` liczy je z przyczyną `8=storage_unavailable`.
+Po włożeniu karty zapis zaczyna się od rzeczywistego bieżącego NR; wcześniejszych
+próbek nie odtwarzamy ani nie renumerujemy. Niepróbowane rekordy już znajdujące
+się w kolejce SD po wcześniejszym błędzie pozostają do wznowienia.
+Próby komunikacji z wadliwą lub nieobecną kartą mają nadal ograniczone
+czasowo oczekiwania SPI, które mogą chwilowo opóźnić odświeżenie TFT;
+akwizycja DMA działa w tym czasie dalej.
+Brak fixa lub UTC nie zatrzymuje zapisu. Szczegóły diagnostyki startu i pamięci:
 [P0_REVIEW_2026-11-02.md](P0_REVIEW_2026-11-02.md).
 Po przepełnieniu nie wstawiamy sztucznych próbek: luki NR oraz liczniki
 `IMU_DROPPED`, `IMU_MISSED_DRDY`, `SD_QUEUE_DROPPED` ujawniają utratę danych.

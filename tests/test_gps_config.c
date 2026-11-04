@@ -14,7 +14,6 @@ static int drop_ack,unsupported_pps,unsupported_diagnostics,no_fix_receiver,hold
 static unsigned diagnostic_polls;
 static unsigned tx_aborts,recovery_commands;
 static int sky_tracking,suppress_sky,nmea_bad_checksum,suppress_nmea;
-static uint32_t recovery_command_tick;
 static uint8_t pulse_configuration[20];
 static unsigned transmissions,port_sets,rate_polls;
 uint32_t HAL_GetTick(void) { return tick; }
@@ -117,9 +116,8 @@ HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *handle,const uint8_t 
         }
         break;
     case 4:
-        /* Controlled GNSS-only hot start: never clear backup data. No ACK. */
-        assert(size==4 && payload[0]==0 && payload[1]==0 && payload[2]==2 && payload[3]==0);
-        ++recovery_commands; recovery_command_tick=tick;
+        ++recovery_commands;
+        assert(!"NO FIX must never cause a GNSS reset");
         break;
     case 7:
         if (unsupported_pps) { const uint8_t n[]={6,7}; reply(5,0,n,2); break; }
@@ -174,7 +172,7 @@ static void reset(uint32_t baud,uint32_t start)
     memset(pulse_configuration,0,20); pulse_configuration[12]=47;
     unsupported_pps=unsupported_diagnostics=no_fix_receiver=hold_diagnostic_tx=0; diagnostic_polls=tx_aborts=0;
     uart.ErrorCode=0; drop_ack=0; powered=rx_connected=1; corrupt_reply=nak=nak_port=ignore_port=ignore_message=ignore_rate=fail_tx=fail_init=short_reply=0;
-    sky_tracking=1; suppress_sky=nmea_bad_checksum=suppress_nmea=0; recovery_commands=recovery_command_tick=0;
+    sky_tracking=1; suppress_sky=nmea_bad_checksum=suppress_nmea=0; recovery_commands=0;
     transmissions=port_sets=rate_polls=0; target=NULL; uart.Init.BaudRate=GPS_BOOT_BAUD;
     assert(GPS_Init(&uart)==HAL_OK);
 }
@@ -348,19 +346,13 @@ int main(void)
     until(GPS_CONFIG_READY,3000); streaming(); run_ms(130000);
     assert(GPS_GetData()->position_valid && !recovery_commands && !gps_diag.recovery_attempts);
 
-    /* Persistent fresh zero-signal reports get exactly one hot restart per boot. */
+    /* A real receiver may need 3-5 minutes. Even 15 minutes of zero signals
+       must not restart acquisition or clear its accumulated navigation data. */
     reset(GPS_BOOT_BAUD,0); no_fix_receiver=1; sky_tracking=0;
-    until(GPS_CONFIG_READY,3000); run_ms(115000);
-    assert(!recovery_commands && !gps_diag.recovery_attempts);
-    uint32_t deadline=tick;
-    while (!recovery_commands) { step(); assert((uint32_t)(tick-deadline)<15000U); }
-    assert(recovery_commands==1 && gps_diag.recovery_attempts==1);
-    assert(gps_diag.recovery_us==(uint64_t)recovery_command_tick*1000U);
-    unsigned sent=transmissions; run_ms(900); assert(transmissions==sent);
-    run_ms(3000); check_ready(); assert(GPS_GetConfig()->acquisition_only);
-    uint32_t epochs=gps_diag.epoch_count,nmea_count=gps_diag.nmea_sentences;
-    run_ms(250000); assert(recovery_commands==1 && gps_diag.recovery_attempts==1 && gps_diag.epoch_count>=epochs && gps_diag.nmea_sentences>nmea_count);
+    until(GPS_CONFIG_READY,3000); run_ms(900000);
+    assert(!recovery_commands && !gps_diag.recovery_attempts && !gps_diag.recovery_us);
+    assert(GPS_GetConfig()->acquisition_only && gps_diag.nmea_sentences>8000);
     no_fix_receiver=0; streaming(); run_ms(1000);
-    assert(GPS_GetData()->position_valid && recovery_commands==1);
-    puts("PASS GPS config: legacy NMEA acquisition, UBX/PPS after fix, bounded GNSS hot recovery, checksums/readback, 5Hz/38400, message rates, MCU/receiver restarts, missing RX, NAK, verification, UART faults and wrap");
+    assert(GPS_GetData()->position_valid && !recovery_commands);
+    puts("PASS GPS config: legacy NMEA acquisition, UBX/PPS after fix, uninterrupted cold acquisition, checksums/readback, 5Hz/38400, message rates, MCU/receiver restarts, missing RX, NAK, verification, UART faults and wrap");
 }

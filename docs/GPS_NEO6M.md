@@ -1,4 +1,4 @@
-# GPS u-blox NEO-6M — firmware 2.1.2
+# GPS u-blox NEO-6M — firmware 2.1.4
 
 Moduł GY-NEO6MV2 komunikuje się przez USART3. Zasilanie podaj według
 specyfikacji konkretnego breakouta; poziomy UART przy STM32 muszą wynosić
@@ -45,12 +45,10 @@ Dochodzi zmienna długość GGA/RMC po 5 Hz; przy UART 38400 bit/s
 Dodatkowe komunikaty wcześniej włączone innym narzędziem nie są globalnie
 wyłączane; nadmiar ujawni się jako przepełnienie bufora.
 
-Podczas braku fixa działa [diagnostyka i ograniczona próba odzyskania
-odbioru](GPS_DIAGNOSTICS.md). Po 120 s ciągłych świeżych odczytów SVINFO
-bez C/N₀ i śledzenia kodu możliwy jest jeden gorący restart samego GNSS
-na uruchomienie MCU. Nie kasuje danych podtrzymywanych baterią, nie zmienia
-konfiguracji trwale i nie zatrzymuje zapisu IMU. Sam brak pozycji przy
-śledzonych sygnałach nie uruchamia tej operacji.
+Podczas braku fixa działa [diagnostyka odbiornika](GPS_DIAGNOSTICS.md).
+Od 2.1.4 brak fixa lub śledzenia nie powoduje automatycznego restartu GNSS.
+Odbiornik zachowuje nieprzerwane okno akwizycji, także gdy potrzebuje
+3–5 minut lub dłużej. Wszystkie elementy loggera działają równocześnie.
 
 Bufor UART: 1024 bajty, przerwanie odbioru jednego bajtu. Koniec ramki dostaje
 64-bitowy czas w ISR; checksum i interpretacja są wykonywane poza ISR.

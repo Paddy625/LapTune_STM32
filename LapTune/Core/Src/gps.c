@@ -16,7 +16,7 @@ static volatile uint8_t restart_rx, overflow;
 static GPS_Data data;
 static GPS_ConfigStatus configuration;
 typedef enum { DISCOVER_SEND, DISCOVER_WAIT, PORT_SET, SWITCH_WAIT,
-               INFO_SEND,INFO_WAIT,SETTING_SEND, SETTING_DELAY, SETTING_WAIT, ACQUIRE, RECOVERY_WAIT, CONFIG_DONE, CONFIG_RETRY } Phase;
+               INFO_SEND,INFO_WAIT,SETTING_SEND, SETTING_DELAY, SETTING_WAIT, ACQUIRE, CONFIG_DONE, CONFIG_RETRY } Phase;
 static Phase phase;
 static uint32_t phase_ms;
 static uint8_t probe,probes,setting,attempt,port_attempts,setting_ack,pulse_loaded;
@@ -36,7 +36,6 @@ static uint8_t ubx_state,ubx_class,ubx_id,ubx_a,ubx_b,ubx_check;
 static uint16_t ubx_length,ubx_index;
 static uint8_t ubx_payload[64];
 static uint8_t diagnostic_index,sky_nonzero,sky_locked,sky_max;
-static uint64_t no_signal_since;
 /* NMEA is a startup/health signal only. Stream fields without a line buffer or
    GPS_NMEA_Parse's stack frame (this runs inside the storage service hook). */
 static struct {
@@ -112,7 +111,6 @@ static void receiver_status(uint64_t us)
         ubx_length==8U+12U*ubx_payload[4]) {
         r->sky_channels=ubx_payload[4]; r->cno_nonzero=sky_nonzero;
         r->code_locked=sky_locked; r->cno_max=sky_max; r->sky_rx_us=us; r->seen|=GPS_RX_SKY;
-        if (sky_nonzero || sky_locked) no_signal_since=0;
     } else if (ubx_class==0x0A && ubx_id==9 && (ubx_length==60 || ubx_length==68)) {
         r->noise_per_ms=le16(ubx_payload+16); r->agc_count=le16(ubx_payload+18);
         r->antenna_status=ubx_payload[20]; r->antenna_power=ubx_payload[21]; r->hw_flags=ubx_payload[22];
@@ -175,7 +173,7 @@ static void discover(void)
     configuration.state=GPS_CONFIG_PENDING; configuration.error=GPS_CFG_OK;
     configuration.measurement_ms=configuration.nav_rate=configuration.time_ref=0;
     configuration.attempts=0; configuration.pps_state=configuration.pps_error=pulse_loaded=0;
-    configuration.acquisition_only=1; no_signal_since=0;
+    configuration.acquisition_only=1;
     probe=(gps_uart->Init.BaudRate==GPS_RUN_BAUD); probes=setting=attempt=port_attempts=0;
     phase=DISCOVER_SEND;
 }
@@ -343,16 +341,12 @@ static void configure(uint32_t now)
     case ACQUIRE:
         if (gps_diag.nmea_fix_sentences && Timebase_NowUs()-gps_diag.nmea_last_fix_us<1000000U) {
             configuration.acquisition_only=0; setting=6; attempt=0;
-            configuration.state=GPS_CONFIG_PENDING; phase=SETTING_SEND; no_signal_since=0; break;
+            configuration.state=GPS_CONFIG_PENDING; phase=SETTING_SEND; break;
         }
         /* fall through */
     case CONFIG_DONE:
         if (!data.connected && (uint32_t)(now-data.sentence_ms)>=GPS_FRESH_MS) discover();
         else if ((uint32_t)(now-phase_ms)>=1000U) { diagnostic_poll(); phase_ms=now; }
-        break;
-    case RECOVERY_WAIT:
-        /* CFG-RST need not ACK. Wait for TX and GNSS restart, never block IMU/SD. */
-        if (!tx_busy && (uint32_t)(now-phase_ms)>=1000U) discover();
         break;
     case INFO_SEND:
         result=send_frame(0x0A,4,NULL,0); phase=INFO_WAIT; phase_ms=now; break;
@@ -366,27 +360,6 @@ static void configure(uint32_t now)
         break;
     }
     if (result!=HAL_OK) config_error(GPS_CFG_UART,now);
-}
-
-static void recover_stalled_receiver(uint32_t now)
-{
-    uint64_t us=Timebase_NowUs(); const GPS_ReceiverStatus *r=&gps_diag.receiver;
-    if ((phase!=ACQUIRE && phase!=CONFIG_DONE) || gps_diag.recovery_attempts ||
-        !(r->seen&GPS_RX_SKY) || us<r->sky_rx_us || us-r->sky_rx_us>6000000U ||
-        r->cno_nonzero || r->code_locked || data.position_valid || data.receiver_fix_valid ||
-        (gps_diag.nmea_fix_sentences && us-gps_diag.nmea_last_fix_us<3000000U)) {
-        no_signal_since=0; return;
-    }
-    if (!no_signal_since) no_signal_since=us;
-    if (us-no_signal_since<120000000U || tx_busy) return;
-    /* Controlled GNSS-only hot restart. Preserve BBR, almanac and ephemerides.
-       One attempt per MCU boot, including a failed TX: no endless reset loop. */
-    ++gps_diag.recovery_attempts; gps_diag.recovery_us=us;
-    const uint8_t hot_start[]={0,0,2,0};
-    if (send_ubx(4,hot_start,sizeof(hot_start))!=HAL_OK) return;
-    GPS_Epoch_ResetStream(&data,us);
-    configuration.state=GPS_CONFIG_PENDING; configuration.pps_state=0;
-    phase=RECOVERY_WAIT; phase_ms=now;
 }
 
 HAL_StatusTypeDef GPS_Init(UART_HandleTypeDef *uart)
@@ -507,7 +480,6 @@ void GPS_Process(uint32_t now)
         data.connected=1; data.sentence_ms=(uint32_t)(gps_diag.nmea_last_us/1000U);
     }
     configure(now);
-    recover_stalled_receiver(now);
 }
 
 const GPS_Data *GPS_GetData(void) { return &data; }

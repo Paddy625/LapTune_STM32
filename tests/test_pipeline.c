@@ -6,16 +6,16 @@
 #define IMU_FIXTURE_EXTERNAL_CLOCK
 #include "imu_fixture.h"
 #undef now
+static ImuRecord displayed;
+void Logger_OnImuRecord(const ImuRecord *r) { displayed=*r; }
 static void emit(unsigned n)
 { for (unsigned i=0;i<n;++i) pair(0,0,1); tick=(uint32_t)(mono/1000U); }
 static void stall(void) { emit(121); } /* 1.163415 s of independent 104 Hz IRQ/DMA events. */
 int main(void)
 {
-    image=malloc(SECTORS*512U); assert(image); fresh_card(0); no_card=1;
-    SDLogger_Start(); assert(!SDLogger_StartAcquisition(0) && !imu_diag.acquired);
-    advance(37000); SDLogger_ConsumeImu(); assert(!imu_diag.acquired && !sd_log_dropped);
-    no_card=0; SDLogger_Process(tick); assert(SDLogger_Ready());
-    assert(SDLogger_StartAcquisition(0)); assert(sd_diag.sd_ready_us<=imu_diag.start_us);
+    image=malloc(SECTORS*512U); assert(image); fresh_card(0);
+    SDLogger_Start(); assert(SDLogger_Ready());
+    assert(Logger_StartAcquisition()); assert(sd_diag.sd_ready_us<=imu_diag.start_us);
     emit(1); assert(!ImuStream_Count() && imu_diag.dropped==1); emit(73);
     SDLogger_ConsumeImu(); assert(!sd_diag.queue_depth && ImuStream_Count()==73);
     emit(17);
@@ -35,6 +35,32 @@ int main(void)
     char *json=read_file("SESSION.json");
     assert(strstr(json,"\"last_drop_nr\": 512") && strstr(json,"\"last_drop_reason\": 2"));
     assert(strstr(json,"\"last_acquired_nr\": 513") && strstr(json,"\"last_written_nr\": 513")); free(json);
+    ImuStream_Stop();
+    /* Boot with no SD: keep the UI hook fresh beyond the complete raw-ring
+       capacity, explicitly count unrecorded samples, then accept a card live. */
+    fresh_card(0); no_card=1; SDLogger_Start();
+    assert(!SDLogger_Ready() && Logger_StartAcquisition()); emit(1);
+    for (unsigned n=0;n<4000;++n) {
+        emit(1); SDLogger_ConsumeImu(); SDLogger_Process(tick);
+        assert(displayed.nr==imu_diag.acquired && !ImuStream_Count());
+    }
+    assert(imu_diag.acquired==4001 && imu_diag.dropped==1 && sd_log_dropped==4000);
+    assert(sd_diag.last_drop_nr==4001 && sd_diag.last_drop_reason==8);
+    assert(!sd_log_written && !sd_diag.sd_ready_us);
+    no_card=0; on_init=stall; advance(SD_LOG_RETRY_INTERVAL_MS); SDLogger_Process(tick);
+    assert(SDLogger_Ready() && !on_init && sd_diag.sd_ready_us>imu_diag.start_us);
+    emit(90);
+    while (ImuStream_Count() || sd_diag.queue_depth) { SDLogger_ConsumeImu(); SDLogger_Process(tick); advance(10); }
+    assert(sd_log_written==211 && sd_diag.first_written_nr==4002 && sd_diag.last_written_nr==4212);
+    assert(sd_log_dropped==4000 && imu_diag.dropped==1);
+    stop(); free(read_log("LOG0001.TXT",211));
+    json=read_file("SESSION.json");
+    assert(strstr(json,"\"last_drop_reason\": 8") && strstr(json,"8=storage_unavailable")); free(json);
+    /* Card loss after recording also leaves the display and acquisition live. */
+    SDLogger_RequestResume(); SDLogger_Process(tick); no_card=1;
+    advance(SD_LOG_SNAPSHOT_INTERVAL_MS+1); SDLogger_Process(tick); assert(sd_log_state==LOG_CARD_ERROR);
+    for (unsigned n=0;n<400;++n) { emit(1); SDLogger_ConsumeImu(); SDLogger_Process(tick); assert(displayed.nr==imu_diag.acquired); }
+    assert(!ImuStream_Count() && sd_log_dropped==4400 && imu_diag.dropped==1);
     ImuStream_Stop(); assert(f_mount(NULL,"",0)==FR_OK); free(image);
-    puts("PASS full pipeline: SD-first startup, no GPS/UTC dependency, queue backpressure, 1.163s stall, real DMA buffers, visible overload gaps");
+    puts("PASS full pipeline: SD-first when available, live IMU without SD and after reinsertion, no GPS/UTC dependency, queue backpressure, 1.163s stall, real DMA buffers, visible overload gaps");
 }

@@ -1,4 +1,26 @@
-# Diagnostyka NO FIX — firmware 2.1.3
+# Diagnostyka NO FIX — firmware 2.1.4
+
+## Aktualna wersja 2.1.4
+
+Usunięto automatyczny restart GNSS po braku śledzenia. Odbiornik może
+szukać fixa bez limitu czasu, przy działającym IMU, TFT i zapisie SD.
+Nie dodano osobnego trybu testowego ani przełączania funkcji przy starcie.
+Konfiguracja 5 Hz i start GGA/RMC pozostają bez zmian.
+
+W ostatniej sesji 2.1.3 odebrano 6504 poprawne zdania NMEA, bez wskazania
+fixa. Firmware wysłał jedną komendę restartu po około 181 s; obserwacja
+kończyła się około 652 s. Nie jest to czysty test samego GGA/RMC, ponieważ
+restart ingerował w akwizycję. Użytkownik podaje zwykły czas uzyskania
+fixa 3–5 minut; próg 120 s ciągłych raportów bez śledzenia był zbyt agresywny.
+Z tych danych nie ustalono przyczyny pierwotnego braku fixa. Wycofanie
+restartu nie jest deklaracją potwierdzonej sprzętowo naprawy odbioru.
+
+Poprawiono też pracę IMU bez SD: po pierwszej próbie przygotowania karty
+sensor rusza niezależnie od jej wyniku. Gdy nośnik nie jest dostępny,
+konsument opróżnia pierścień, aktualizuje wartości do wyświetlenia i jawnie
+liczy niezapisane próbki (`last_drop_reason=8`, `storage_unavailable`).
+Pełna kolejka sprawnego zapisu nadal stosuje backpressure. Włożenie karty
+uruchamia zapis bez ponownej numeracji i bez restartu IMU.
 
 ## Wersja programu i status na ekranie
 
@@ -42,7 +64,7 @@ logger odbiera kompletne rozwiązania oznaczane jako nieważne. Do rozróżnieni
 braku śledzenia satelitów od ograniczeń rozwiązania potrzebne są dane
 odbiornika opisane poniżej. Brak PPS sam w sobie nie blokuje pozycji.
 
-## Zmiana startu i odzyskiwanie w 2.1.2
+## Historia zmian 2.1.2–2.1.3 (restart wycofany w 2.1.4)
 
 Porównanie z ostatnią działającą wersją `461c935` wskazało zmianę
 protokołu wyjściowego: GGA/RMC zastąpiono od początku strumieniem UBX.
@@ -60,7 +82,7 @@ nie tworzy konkurencyjnego cache współrzędnych i nie miesza danych NMEA
 z rekordami UBX. W krótkiej fazie przejścia TFT i log czekają na ważną
 epokę UBX. Nie uzależniono rejestrowania IMU od tego oczekiwania.
 
-Dodano jedną ograniczoną próbę odzyskania odbioru na uruchomienie MCU.
+W 2.1.2–2.1.3 stosowano jedną ograniczoną próbę odzyskania odbioru na uruchomienie MCU. Poniższy mechanizm został usunięty w 2.1.4.
 Warunkiem jest **120 s ciągłych świeżych odczytów NAV-SVINFO** z zerowym
 C/N₀ i zerowym śledzeniem kodu oraz brak ważnego fixa. Brak odpowiedzi,
 przestarzałe SVINFO lub śledzone sygnały nie spełniają warunku. Operacja
@@ -145,8 +167,8 @@ po uzyskaniu fixa, kiedy dalsze odpytywanie ustaje.
 | gps_nmea_fix_sentences | licznik takich zdań zgłaszających ważny fix; również nie licznik unikalnych epok |
 | gps_nmea_last_us | czas przetworzenia ostatniego poprawnego zdania NMEA w skali MCU |
 | gps_nmea_last_fix_us | czas przetworzenia ostatniego zdania NMEA z ważnym fixem w skali MCU |
-| gps_recovery_attempts | liczba prób ograniczonego restartu GNSS, najwyżej jedna na uruchomienie MCU |
-| gps_recovery_us | czas próby restartu w skali MCU; zero przed próbą |
+| gps_recovery_attempts | pole zachowane dla zgodności; od 2.1.4 zawsze 0, brak automatycznych restartów GNSS |
+| gps_recovery_us | historyczny czas próby restartu; od 2.1.4 zawsze 0 |
 
 `gps_received_epochs`, `gps_valid_epochs` i `gps_invalid_fixes` nadal
 liczą epoki UBX. Podczas oczekiwania w profilu GGA/RMC mogą pozostawać
@@ -159,8 +181,8 @@ nie oznacza jeszcze fixa, zakończenia etapu NMEA ani lock PPS.
 
 ## Sprawdzenie aktualizacji
 
-1. Pobierz `main`, wykonaj Clean/Build w CubeIDE i wgraj **2.1.3**.
-   Na TFT musi być `LAPTUNE 2.1.3`. Archiwalny HEX 2.1.1 nie zawiera tych zmian.
+1. Pobierz `main`, wykonaj Clean/Build w CubeIDE i wgraj **2.1.4**.
+   Na TFT musi być `LAPTUNE 2.1.4`. Archiwalny HEX 2.1.1 nie zawiera tych zmian.
    Jeśli wersja na TFT jest starsza, sprawdź w Debug Configurations →
    C/C++ Application, czy ELF pochodzi z aktualnie budowanego projektu
    (`LapTune/Debug/LapTune.elf` albo odpowiedniej konfiguracji Release).
@@ -181,8 +203,8 @@ Nie zwiększono buforów UART, IMU ani kolejki SD. Usunięto lokalną kopię
 GPS_Diagnostics w funkcji pobierającej migawkę: dane trafiają bezpośrednio
 do bufora wywołującego pod krótką maską przerwań. Jest to istotne przy
 diagnostyce stosu na STM32F103RB. Dokładny RAM i pojedyncze ramki stosu
-podaje `memory-report.json` po budowaniu. W kompilacji **2.1.2** statyczny
-RAM wynosi 17128 B (Debug) i 17136 B (Release); pozostaje 3352/3344 B
+podaje `memory-report.json` po budowaniu. W kompilacji **2.1.4** statyczny
+RAM wynosi 17120 B (Debug) i 17128 B (Release); pozostaje 3360/3352 B
 na stos i stertę przy rezerwacjach 2560/512 B. Parser statusu NMEA
 przetwarza bajty bez bufora zdania i bez lokalnej kopii GPS_Data;
 jego ramka stosu Debug ma 32 B. Session_Write ma ramkę 920 B.
@@ -195,7 +217,8 @@ Testy obejmują długie SVINFO z maksimum C/N₀ w ostatnim kanale, checksum,
 błędną długość, oba formaty MON-HW, surowe flagi SOL/UTC, odczyty bez zapisu
 ustawień, NAK, timeout TX i ustanie odpytywania po odzyskaniu fixa.
 Nowe testy sprawdzają osobno start przez GGA lub RMC, brak publikacji
-współrzędnych z NMEA, przejście do UBX/PPS oraz jeden restart po 120 s
-zerowego śledzenia. Brak PPS, nieaktualne SVINFO i śledzone sygnały
-nie powodują restartów. Pełny zestaw testów hosta (ASan/UBSan) oraz
+współrzędnych z NMEA, przejście do UBX/PPS oraz 15 minut akwizycji bez
+jakichkolwiek komend restartu, także przy zerowym śledzeniu. Test pełnego
+pipeline sprawdza odczyty bez SD przez 4000 próbek, aktualizację danych
+dla ekranu, włożenie karty podczas akwizycji oraz jej późniejsze wyjęcie. Pełny zestaw testów hosta (ASan/UBSan) oraz
 kompilacje ARM Debug i Release przeszły; nie jest to test odbioru RF.

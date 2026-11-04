@@ -65,7 +65,7 @@ float ax, max_x=0, min_x=0, ay, max_y=0, min_y=0, az, max_z=0, min_z=0;
 float gx, min_gx=0, max_gx=0, gy, min_gy=0, max_gy=0, gz, min_gz=0, max_gz=0;
 static uint8_t sensor_ok, have_sample, sample_valid;
 static uint32_t last_sensor_retry;
-static uint8_t app_ready,acquisition_started;
+static uint8_t app_ready;
 static uint32_t last_ui_nr;
 
 /* USER CODE END PV */
@@ -212,11 +212,9 @@ int main(void)
         ImuStream_Stalled(1000000U)) {
       ImuStream_Stop(); sensor_ok=0;
     }
-    if (!sensor_ok && (acquisition_started || SDLogger_Ready()) &&
-        (uint32_t)(now-last_sensor_retry)>=1000U) {
+    if (!sensor_ok && (uint32_t)(now-last_sensor_retry)>=1000U) {
       ImuStream_Stop();
-      sensor_ok=SDLogger_StartAcquisition(acquisition_started);
-      if (sensor_ok) acquisition_started=1;
+      sensor_ok=Logger_StartAcquisition();
       last_sensor_retry=HAL_GetTick();
     }
     SDLogger_Process(HAL_GetTick());

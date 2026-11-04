@@ -1,6 +1,6 @@
 # Kontrakt loggera 2.1.0 (P0 + mapowanie PPS)
 
-**Aktualne zmiany:** [GPS/PPS 2.1.0](GPS_PPS.md). Historyczny przegląd P0: [P0_REVIEW_2026-11-02.md](P0_REVIEW_2026-11-02.md).
+**Aktualne zmiany 2.1.4:** [GPS bez automatycznych restartów i IMU bez SD](GPS_DIAGNOSTICS.md). [Mapowanie PPS](GPS_PPS.md). Historyczny przegląd P0: [P0_REVIEW_2026-11-02.md](P0_REVIEW_2026-11-02.md).
 
 P0 wprowadza niezależny czas IMU, rzeczywiste zdarzenia DRDY, spójne epoki
 UBX, osobne sesje uruchomień i diagnostykę braków. Zachowuje **104 Hz,
@@ -127,7 +127,7 @@ Liczniki są kumulacyjne dla uruchomienia, odczytywane przy formatowaniu:
 - GPS_INCOMPLETE_EPOCHS — deadline lub brak wolnego slotu składania.
 - GPS_LATE_EPOCHS — spóźnione/zdublowane fragmenty; to liczba fragmentów, nie unikalnych epok.
 - GPS_INVALID_FIXES — opublikowane epoki bez poprawnego rozwiązania.
-- SD_QUEUE_DROPPED — rekordy odrzucone przez logger, także podczas B1/braku karty.
+- SD_QUEUE_DROPPED — rekordy odrzucone przez logger, także podczas B1/braku karty; od 2.1.4 brak dostępnego zapisu ma przyczynę `8=storage_unavailable` w metadanych.
 - SD_MAX_PAUSE_US — maksymalny czas wywołania procesu SD (w tym sync/mount/metadata), nie samego programowania flash karty.
 
 Te liczniki opisują różne etapy i nie należy ich bezwarunkowo sumować.
