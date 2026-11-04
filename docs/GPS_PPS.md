@@ -1,5 +1,7 @@
 # GPS i PPS — firmware 2.1.0
 
+Dodatkowa diagnostyka od 2.1.1: [GPS_DIAGNOSTICS.md](GPS_DIAGNOSTICS.md). Podane niżej wielkości RAM dotyczą kompilacji 2.1.0.
+
 GPS pracuje z częstotliwością **5 Hz**. LSM6DS3 pracuje z natywną ODR
 **104 Hz**; nie ma ustawienia 100 Hz. Rejestrowane są rzeczywiste zbocza DRDY,
 bez zmieniania timestampów w celu wymuszenia idealnego okresu. Dokładnie

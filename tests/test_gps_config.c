@@ -10,11 +10,13 @@ static uint16_t measurement,nav_rate,time_ref;
 static uint8_t message_rates[3][256];
 uint64_t Timebase_NowUs(void) { return (uint64_t)tick*1000U; }
 static int powered,rx_connected,corrupt_reply,nak,nak_port,ignore_port,ignore_message,ignore_rate,fail_tx,fail_init,short_reply;
-static int drop_ack,unsupported_pps;
+static int drop_ack,unsupported_pps,unsupported_diagnostics,no_fix_receiver,hold_diagnostic_tx;
+static unsigned diagnostic_polls;
+static unsigned tx_aborts;
 static uint8_t pulse_configuration[20];
 static unsigned transmissions,port_sets,rate_polls;
 uint32_t HAL_GetTick(void) { return tick; }
-HAL_StatusTypeDef HAL_UART_AbortTransmit(UART_HandleTypeDef *u) { assert(u==&uart); return HAL_OK; }
+HAL_StatusTypeDef HAL_UART_AbortTransmit(UART_HandleTypeDef *u) { assert(u==&uart); ++tx_aborts; return HAL_OK; }
 static void feed(const uint8_t *bytes,unsigned length)
 {
     if (!powered || !target || uart.Init.BaudRate!=receiver_baud) return;
@@ -22,7 +24,7 @@ static void feed(const uint8_t *bytes,unsigned length)
 }
 static void reply(uint8_t cls,uint8_t id,const uint8_t *payload,unsigned len)
 {
-    uint8_t frame[160]={0xB5,0x62,cls,id,(uint8_t)len,(uint8_t)(len>>8)};
+    uint8_t frame[768]={0xB5,0x62,cls,id,(uint8_t)len,(uint8_t)(len>>8)};
     assert(len+8<=sizeof(frame)); if (len) memcpy(frame+6,payload,len);
     uint8_t a=0,b=0;
     for (unsigned i=2;i<6+len;++i) { a+=frame[i]; b+=a; }
@@ -54,8 +56,9 @@ HAL_StatusTypeDef HAL_UART_Init(UART_HandleTypeDef *handle)
 }
 HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *handle,const uint8_t *p,uint16_t len)
 {
-    assert(handle==&uart && len>=8 && p[0]==0xB5 && p[1]==0x62 && (p[2]==6 || p[2]==0x0A));
-    GPS_OnTxComplete(handle);
+    assert(handle==&uart && len>=8 && p[0]==0xB5 && p[1]==0x62 && (p[2]==6 || p[2]==0x0A || p[2]==1));
+    int diagnostic=p[2]==1 || (p[2]==0x0A && p[3]==9) || (p[2]==6 && (p[3]==0x24 || p[3]==0x11));
+    if (!hold_diagnostic_tx || !diagnostic) GPS_OnTxComplete(handle);
     ++transmissions;
     if (fail_tx) return HAL_TIMEOUT;
     unsigned size=(unsigned)p[4]|((unsigned)p[5]<<8); assert(size+8==len);
@@ -63,6 +66,19 @@ HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *handle,const uint8_t 
     for (unsigned i=2;i<len-2U;++i) { a+=p[i]; b+=a; }
     assert(p[len-2]==a && p[len-1]==b);
     if (!powered || !rx_connected || receiver_baud!=uart.Init.BaudRate) return HAL_OK;
+    if (p[2]==1 || (p[2]==0x0A && p[3]==9) || (p[2]==6 && (p[3]==0x24 || p[3]==0x11))) {
+        assert(!size); ++diagnostic_polls;
+        if (unsupported_diagnostics) { const uint8_t nak[]={p[2],p[3]}; reply(5,0,nak,2); return HAL_OK; }
+        if (p[2]==1) {
+            assert(p[3]==0x30); uint8_t sky[8+12*20]={0}; sky[4]=20;
+            sky[8+19*12+3]=5; sky[8+19*12+4]=49; reply(1,0x30,sky,sizeof(sky));
+        } else if (p[2]==0x0A) {
+            uint8_t hw[68]={0}; hw[20]=2; hw[21]=1; hw[53]=10; reply(0x0A,9,hw,68);
+        } else if (p[3]==0x24) {
+            uint8_t nav5[36]={0}; nav5[2]=4; nav5[3]=3; nav5[12]=5; nav5[14]=250; reply(6,0x24,nav5,36);
+        } else { const uint8_t rxm[]={8,0}; reply(6,0x11,rxm,2); }
+        return HAL_OK;
+    }
     if (p[2]==0x0A) {
         uint8_t version[70]={0}; memcpy(version,"7.03 TEST",9); memcpy(version+30,"00040007",8);
         reply(0x0A,4,version,sizeof(version)); return HAL_OK;
@@ -124,6 +140,7 @@ static void nav(void)
     int32_t altitude=545400;
     for (unsigned i=0;i<4;++i) pos[16+i]=(uint8_t)((uint32_t)altitude>>(8*i));
     sol[10]=3; sol[11]=0x0D; sol[47]=8;
+    if (no_fix_receiver) sol[10]=sol[11]=sol[47]=0;
     if (message_rates[1][2]) reply(1,2,pos,sizeof(pos));
     if (message_rates[1][0x12]) reply(1,0x12,vel,sizeof(vel));
     if (message_rates[1][6]) reply(1,6,sol,sizeof(sol));
@@ -137,7 +154,8 @@ static void reset(uint32_t baud,uint32_t start)
 {
     tick=start; receiver_baud=baud; last_nav=tick; measurement=1000; nav_rate=time_ref=1;
     memset(message_rates,0,sizeof(message_rates)); for (unsigned i=0;i<=5;++i) message_rates[0][i]=1;
-    memset(pulse_configuration,0,20); pulse_configuration[12]=47; unsupported_pps=0;
+    memset(pulse_configuration,0,20); pulse_configuration[12]=47;
+    unsupported_pps=unsupported_diagnostics=no_fix_receiver=hold_diagnostic_tx=0; diagnostic_polls=tx_aborts=0;
     uart.ErrorCode=0; drop_ack=0; powered=rx_connected=1; corrupt_reply=nak=nak_port=ignore_port=ignore_message=ignore_rate=fail_tx=fail_init=short_reply=0;
     transmissions=port_sets=rate_polls=0; target=NULL; uart.Init.BaudRate=GPS_BOOT_BAUD;
     assert(GPS_Init(&uart)==HAL_OK);
@@ -170,6 +188,15 @@ int main(void)
     }
     assert(GPS_GetConfig()->pps_state==1 && message_rates[2][1]==1 && pulse_configuration[9]==1 && pulse_configuration[12]==47);
     assert(updates>=5 && GPS_GetData()->altitude_valid && GPS_GetData()->altitude_mm==545400);
+    assert(!diagnostic_polls); no_fix_receiver=1;
+    for (unsigned i=0;i<1000;++i) step();
+    assert(diagnostic_polls>=4 && (gps_diag.receiver.seen&60)==60 && gps_diag.receiver.cno_max==49);
+    assert(gps_diag.receiver.dynamic_model==4 && gps_diag.receiver.fix_mode==3 && gps_diag.receiver.pdop_limit==250);
+    assert(!GPS_GetData()->position_valid && !gps_diag.receiver.used_sats && !gps_diag.receiver.fix_type);
+    no_fix_receiver=0; for (unsigned i=0;i<100;++i) step();
+    unsigned polls=diagnostic_polls;
+    for (unsigned i=0;i<500;++i) step();
+    assert(GPS_GetData()->position_valid && diagnostic_polls==polls);
     uint32_t runtime=tick; uart.ErrorCode=HAL_UART_ERROR_FE|HAL_UART_ERROR_ORE;
     GPS_OnError(&uart); step();
     assert(gps_diag.uart_by_phase[1][0]==1 && gps_diag.uart_by_phase[1][2]==1);
@@ -227,5 +254,15 @@ int main(void)
     reset(GPS_BOOT_BAUD,0); unsupported_pps=1; until(GPS_CONFIG_READY,3000);
     for (unsigned n=0;n<200;++n) step();
     assert(GPS_GetConfig()->state==GPS_CONFIG_READY && GPS_GetConfig()->pps_state==2 && GPS_GetData()->position_valid);
+    reset(GPS_BOOT_BAUD,0); unsupported_diagnostics=no_fix_receiver=1; until(GPS_CONFIG_READY,3000);
+    for (unsigned n=0;n<1200;++n) step();
+    assert(diagnostic_polls>=4 && !(gps_diag.receiver.seen&60) && !GPS_GetData()->position_valid);
+    assert(GPS_GetConfig()->state==GPS_CONFIG_READY && GPS_GetConfig()->pps_state==1);
+    unsupported_diagnostics=0; fail_tx=1;
+    for (unsigned n=0;n<240;++n) step();
+    assert(gps_diag.tx_errors && GPS_GetConfig()->state==GPS_CONFIG_READY && GPS_GetConfig()->pps_state==1);
+    fail_tx=0; hold_diagnostic_tx=1;
+    for (unsigned n=0;n<240;++n) step();
+    assert(tx_aborts && GPS_GetConfig()->state==GPS_CONFIG_READY && GPS_GetConfig()->pps_state==1);
     puts("PASS GPS config: UBX checksums/readback, 5Hz/38400, message rates, MCU/receiver restarts, missing RX, NAK, verification, UART faults and wrap");
 }

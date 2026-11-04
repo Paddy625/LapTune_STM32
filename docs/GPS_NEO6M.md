@@ -68,3 +68,5 @@ z jednej epoki UBX. S oznacza satelity z NAV-SOL, ALT oznacza MSL.
 CFG-TP/TIM-TP nie blokuje nawigacji 5 Hz. Odbiornik nie jest kalibrowany
 na podstawie ODR IMU. Model dynamiki, oszczędzanie energii i static hold
 nie są zmieniane; wymagają osobnej weryfikacji na konkretnym odbiorniku.
+
+Diagnostyka odbiornika podczas NO FIX (2.1.1): [C/N₀, antena, SOL i konfiguracja](GPS_DIAGNOSTICS.md).

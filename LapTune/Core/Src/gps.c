@@ -35,9 +35,30 @@ static uint64_t packet_us;
 static uint8_t ubx_state,ubx_class,ubx_id,ubx_a,ubx_b,ubx_check;
 static uint16_t ubx_length,ubx_index;
 static uint8_t ubx_payload[64];
+static uint8_t diagnostic_index,sky_nonzero,sky_locked,sky_max;
 
 static uint16_t le16(const uint8_t *p) { return (uint16_t)p[0]|((uint16_t)p[1]<<8); }
 static uint32_t le32(const uint8_t *p) { return (uint32_t)le16(p)|((uint32_t)le16(p+2)<<16); }
+static void receiver_status(uint64_t us)
+{
+    GPS_ReceiverStatus *r=&gps_diag.receiver;
+    if (ubx_class==1 && ubx_id==0x30 && ubx_length>=8 &&
+        ubx_length==8U+12U*ubx_payload[4]) {
+        r->sky_channels=ubx_payload[4]; r->cno_nonzero=sky_nonzero;
+        r->code_locked=sky_locked; r->cno_max=sky_max; r->sky_rx_us=us; r->seen|=GPS_RX_SKY;
+    } else if (ubx_class==0x0A && ubx_id==9 && (ubx_length==60 || ubx_length==68)) {
+        r->noise_per_ms=le16(ubx_payload+16); r->agc_count=le16(ubx_payload+18);
+        r->antenna_status=ubx_payload[20]; r->antenna_power=ubx_payload[21]; r->hw_flags=ubx_payload[22];
+        r->jamming=ubx_payload[ubx_length==68 ? 53 : 45];
+        r->hw_rx_us=us; r->seen|=GPS_RX_HW;
+    } else if (ubx_class==6 && ubx_id==0x24 && ubx_length==36) {
+        r->dynamic_model=ubx_payload[2]; r->fix_mode=ubx_payload[3];
+        r->min_elevation=(int8_t)((int16_t)ubx_payload[12]-(ubx_payload[12]>=128 ? 256 : 0));
+        r->pdop_limit=le16(ubx_payload+14); r->seen|=GPS_RX_NAV5;
+    } else if (ubx_class==6 && ubx_id==0x11 && ubx_length==2) {
+        r->power_mode=ubx_payload[1]; r->seen|=GPS_RX_POWER;
+    }
+}
 static void config_error(GPS_ConfigError reason,uint32_t now)
 {
     if (setting>=PULSE_SETTING && configuration.state==GPS_CONFIG_READY) {
@@ -63,6 +84,14 @@ static HAL_StatusTypeDef send_frame(uint8_t cls,uint8_t id,const uint8_t *payloa
 }
 static HAL_StatusTypeDef send_ubx(uint8_t id,const uint8_t *payload,uint8_t length)
 { return send_frame(6,id,payload,length); }
+static void diagnostic_poll(void)
+{
+    static const uint8_t classes[]={1,0x0A,6,6},ids[]={0x30,9,0x24,0x11};
+    if (tx_busy || data.position_valid || data.receiver_fix_valid) return;
+    /* Poll only: never change acquisition, antenna, dynamics or power settings. */
+    (void)send_frame(classes[diagnostic_index],ids[diagnostic_index],NULL,0);
+    diagnostic_index=(diagnostic_index+1U)%4U;
+}
 static uint8_t change_baud(uint32_t baud)
 {
     if (tx_busy || HAL_UART_AbortReceive(gps_uart)!=HAL_OK) return 0;
@@ -87,6 +116,7 @@ static void packet_received(uint32_t now)
     uint64_t us=packet_us;
     GPS_Epoch_Service(&data,us);
     GPS_Epoch_Packet(&data,ubx_class,ubx_id,ubx_payload,ubx_length,us);
+    receiver_status(us);
     if (ubx_class==0x0D && ubx_id==1 && configuration.pps_state==1)
         GPS_Time_PulseMessage(ubx_payload,ubx_length,us);
     if (ubx_class==0x0A && ubx_id==4 && ubx_length>=40) {
@@ -147,15 +177,25 @@ static void ubx_byte(uint8_t ch,uint32_t now)
     case 4: ubx_length=ch; ubx_state=5; break;
     case 5:
         ubx_length|=(uint16_t)ch<<8; ubx_index=0;
+        sky_nonzero=sky_locked=sky_max=0;
         ubx_state=ubx_length>1024U ? 0 : (ubx_length ? 6 : 7); break;
     case 6:
         if (ubx_index<sizeof(ubx_payload)) ubx_payload[ubx_index]=ch;
+        /* Summarise every SV block, including those beyond the 64-byte buffer.
+           Results become visible only after the full frame passes checksum. */
+        if (ubx_class==1 && ubx_id==0x30 && ubx_index>=8) {
+            unsigned offset=(ubx_index-8U)%12U;
+            if (offset==3 && (ch&7U)>=4) ++sky_locked;
+            if (offset==4 && ch) { ++sky_nonzero; if (ch>sky_max) sky_max=ch; }
+        }
         if (++ubx_index==ubx_length) ubx_state=7;
         break;
     case 7: ubx_check=ch; ubx_state=8; break;
     case 8:
         ubx_state=0;
-        if (ubx_check==ubx_a && ch==ubx_b && (ubx_length<=sizeof(ubx_payload) || (ubx_class==0x0A && ubx_id==4))) packet_received(now);
+        if (ubx_check==ubx_a && ch==ubx_b &&
+            (ubx_length<=sizeof(ubx_payload) || (ubx_class==0x0A && (ubx_id==4 || ubx_id==9)) ||
+             (ubx_class==1 && ubx_id==0x30))) packet_received(now);
         else if (ubx_check!=ubx_a || ch!=ubx_b) {
             if (!gps_diag.checksum_errors) gps_diag.checksum_first_us=packet_us;
             gps_diag.checksum_last_us=packet_us;
@@ -232,6 +272,7 @@ static void configure(uint32_t now)
         break;
     case CONFIG_DONE:
         if (!data.connected && (uint32_t)(now-data.sentence_ms)>=GPS_FRESH_MS) discover();
+        else if ((uint32_t)(now-phase_ms)>=1000U) { diagnostic_poll(); phase_ms=now; }
         break;
     case INFO_SEND:
         result=send_frame(0x0A,4,NULL,0); phase=INFO_WAIT; phase_ms=now; break;
@@ -252,6 +293,7 @@ HAL_StatusTypeDef GPS_Init(UART_HandleTypeDef *uart)
     if (uart == NULL) return HAL_ERROR;
     gps_uart = uart; head = tail = 0;
     restart_rx = overflow = tx_busy = 0;
+    diagnostic_index=0;
     GPS_NMEA_Init(&data);
     GPS_Epoch_Init();
     boundary_head=boundary_tail=irq_ubx_state=0;
@@ -310,16 +352,15 @@ void GPS_OnError(UART_HandleTypeDef *uart)
     if (!error || (error&~known)) ++gps_diag.uart_by_phase[phase_index][4];
     restart_rx=1;
 }
-GPS_Diagnostics GPS_DiagnosticsSnapshot(void)
+void GPS_DiagnosticsSnapshot(GPS_Diagnostics *out)
 {
 #ifndef LAPTUNE_HOST_TEST
     uint32_t mask=__get_PRIMASK(); __disable_irq();
 #endif
-    GPS_Diagnostics d=gps_diag;
+    *out=gps_diag;
 #ifndef LAPTUNE_HOST_TEST
     __set_PRIMASK(mask);
 #endif
-    return d;
 }
 
 void GPS_Process(uint32_t now)
@@ -327,7 +368,7 @@ void GPS_Process(uint32_t now)
     if (gps_uart == NULL) return;
     if (tx_busy && Timebase_NowUs()-tx_started>100000U) {
         (void)HAL_UART_AbortTransmit(gps_uart); tx_busy=0; ++gps_diag.tx_errors;
-        config_error(GPS_CFG_UART,now);
+        if (phase!=CONFIG_DONE) config_error(GPS_CFG_UART,now);
     }
     if (overflow) { overflow=0; ++gps_diag.rx_overflows; restart_rx=1; }
     if (restart_rx) {

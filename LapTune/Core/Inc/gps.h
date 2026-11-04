@@ -22,7 +22,7 @@ typedef struct {
 HAL_StatusTypeDef GPS_Init(UART_HandleTypeDef *uart);
 void GPS_OnRxComplete(UART_HandleTypeDef *uart);
 void GPS_OnTxComplete(UART_HandleTypeDef *uart);
-GPS_Diagnostics GPS_DiagnosticsSnapshot(void);
+void GPS_DiagnosticsSnapshot(GPS_Diagnostics *out);
 void GPS_OnError(UART_HandleTypeDef *uart);
 /* Main loop only: drain IRQ queue, assemble UBX epochs and expire stale fields. */
 void GPS_Process(uint32_t now);

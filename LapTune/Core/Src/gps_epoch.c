@@ -104,6 +104,7 @@ static uint8_t days(uint16_t y,uint8_t m)
 }
 static void utc(GPS_Data *d,const uint8_t *p,uint64_t now)
 {
+    gps_diag.receiver.utc_flags=p[19]; gps_diag.receiver.seen|=GPS_RX_UTC;
     uint16_t year=(uint16_t)p[12]|((uint16_t)p[13]<<8);
     if ((p[19]&7)!=7 || year<1980 || year>2099 || !p[14] || p[14]>12 || !p[15] ||
         p[15]>days(year,p[14]) || p[16]>23 || p[17]>59 || p[18]>59) { d->datetime_valid=0; return; }
@@ -123,6 +124,12 @@ void GPS_Epoch_Packet(GPS_Data *d,uint8_t cls,uint8_t id,const uint8_t *p,unsign
     if (id==0x21 && len==20) { utc(d,p,now); d->sentence_ms=(uint32_t)(now/1000U); d->connected=1; return; }
     uint8_t part=(id==2 && len==28)?1:((id==0x12 && len==36)?2:((id==6 && len==52)?4:0));
     if (!part) return;
+    if (part==4) {
+        GPS_ReceiverStatus *r=&gps_diag.receiver;
+        uint16_t week=(uint16_t)p[8]|((uint16_t)p[9]<<8);
+        r->week=week<=INT16_MAX ? (int16_t)week : (int16_t)((int32_t)week-65536);
+        r->fix_type=p[10]; r->sol_flags=p[11]; r->used_sats=p[47]; r->seen|=GPS_RX_SOL;
+    }
     d->connected=1; d->sentence_ms=(uint32_t)(now/1000U);
     uint32_t itow=u32(p); if (itow>=WEEK_MS) return;
     Slot *s=NULL,*empty=NULL,*oldest=&slots[0];

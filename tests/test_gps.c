@@ -16,12 +16,14 @@ HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *u,const uint8_t *p,ui
     return HAL_OK; }
 HAL_StatusTypeDef HAL_UART_AbortTransmit(UART_HandleTypeDef *u) { assert(u==&uart); return HAL_OK; }
 static void feed(uint8_t ch) { *rx=ch; GPS_OnRxComplete(&uart); }
-static void frame(uint8_t id,const uint8_t *p,unsigned n,int corrupt)
+static void frame_class(uint8_t cls,uint8_t id,const uint8_t *p,unsigned n,int corrupt)
 {
-    uint8_t f[100]={0xB5,0x62,1,id,(uint8_t)n,0}; memcpy(f+6,p,n);
+    uint8_t f[1032]={0xB5,0x62,cls,id,(uint8_t)n,(uint8_t)(n>>8)};
+    assert(n+8<=sizeof(f)); memcpy(f+6,p,n);
     uint8_t a=0,b=0; for (unsigned i=2;i<n+6;++i) { a+=f[i]; b+=a; }
     f[n+6]=a; f[n+7]=b^corrupt; for (unsigned i=0;i<n+8;++i) feed(f[i]);
 }
+static void frame(uint8_t id,const uint8_t *p,unsigned n,int corrupt) { frame_class(1,id,p,n,corrupt); }
 static void epoch(uint32_t itow,int corrupt)
 {
     uint8_t p[28],v[36],s[52]; nav_payloads(itow,p,v,s);
@@ -51,5 +53,20 @@ int main(void)
     assert(gps_diag.rx_overflows==1 && !GPS_GetData()->position_valid);
     fail_rearm=1; feed(0xB5); GPS_Process(1102); fail_rearm=0; GPS_Process(1103);
     now=1300000; epoch(300,0); GPS_Process(1300); assert(GPS_GetData()->position_valid);
+    assert(gps_diag.receiver.fix_type==3 && gps_diag.receiver.sol_flags==13 && gps_diag.receiver.used_sats==9);
+    uint8_t sky[8+24*12]={0}; sky[4]=24;
+    sky[8+3]=4; sky[8+4]=30; sky[8+23*12+3]=5; sky[8+23*12+4]=55;
+    now+=100; frame(0x30,sky,sizeof(sky),0); GPS_Process(1300);
+    assert(gps_diag.receiver.sky_channels==24 && gps_diag.receiver.cno_nonzero==2 &&
+           gps_diag.receiver.code_locked==2 && gps_diag.receiver.cno_max==55 && gps_diag.receiver.sky_rx_us==now);
+    GPS_Diagnostics copy; GPS_DiagnosticsSnapshot(&copy);
+    sky[8+4]=63; frame(0x30,sky,sizeof(sky),1); GPS_Process(1300);
+    assert(gps_diag.receiver.cno_max==55 && gps_diag.checksum_errors==2);
+    sky[4]=2; frame(0x30,sky,sizeof(sky),0); GPS_Process(1300); assert(gps_diag.receiver.cno_max==55);
+    uint8_t hw[68]={0}; hw[16]=123; hw[18]=0x34; hw[19]=0x12; hw[20]=4; hw[21]=1; hw[22]=8;
+    hw[45]=200; hw[53]=9; frame_class(0x0A,9,hw,68,0); GPS_Process(1300);
+    assert(gps_diag.receiver.antenna_status==4 && gps_diag.receiver.jamming==9 && gps_diag.receiver.agc_count==0x1234);
+    frame_class(0x0A,9,hw,60,0); GPS_Process(1300); assert(gps_diag.receiver.jamming==200);
+    assert(!copy.receiver.antenna_status && copy.receiver.cno_max==55 && GPS_GetData()->position_valid);
     puts("PASS GPS UART: IRQ packet timestamps survive delayed parsing, checksums, overflow, recovery, receiver epoch reset");
 }

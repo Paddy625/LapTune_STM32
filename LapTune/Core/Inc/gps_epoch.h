@@ -11,6 +11,17 @@ typedef struct {
     uint8_t position_valid:1,speed_valid:1,altitude_valid:1,epoch_known:1;
     uint8_t time_valid:1,time_sync_state:2,discarded_incomplete:1;
 } GPS_Fix;
+enum { GPS_RX_SOL=1, GPS_RX_UTC=2, GPS_RX_SKY=4, GPS_RX_HW=8, GPS_RX_NAV5=16, GPS_RX_POWER=32 };
+typedef struct {
+    uint64_t sky_rx_us,hw_rx_us;
+    uint16_t noise_per_ms,agc_count,pdop_limit;
+    int16_t week;
+    uint8_t fix_type,sol_flags,used_sats,utc_flags;
+    uint8_t sky_channels,cno_nonzero,code_locked,cno_max;
+    uint8_t antenna_status,antenna_power,jamming,hw_flags;
+    uint8_t dynamic_model,fix_mode,power_mode,seen;
+    int8_t min_elevation;
+} GPS_ReceiverStatus;
 typedef struct {
     uint32_t checksum_errors,uart_errors,rx_overflows,incomplete,late,invalid_fixes,epoch_count,bad_period,history_misses;
     uint32_t min_period_ms,max_period_ms,received_epochs,valid_epochs;
@@ -18,7 +29,7 @@ typedef struct {
     uint64_t uart_first_us,uart_last_us,checksum_first_us,checksum_last_us;
     uint64_t uart_phase_first_us[2],uart_phase_last_us[2];
     uint32_t checksum_by_phase[2],tx_errors;
-
+    GPS_ReceiverStatus receiver;
 } GPS_Diagnostics;
 extern GPS_Diagnostics gps_diag;
 void GPS_Epoch_Init(void);

@@ -43,7 +43,7 @@ static FRESULT number64(FIL *f,const char *key,uint64_t n)
 FRESULT Session_Write(const char *dir)
 {
     /* Freeze all counters before storage hooks can process more UART packets. */
-    ImuDiagnostics imu=ImuStream_Snapshot(); GPS_Diagnostics gps=GPS_DiagnosticsSnapshot();
+    ImuDiagnostics imu=ImuStream_Snapshot(); GPS_Diagnostics gps; GPS_DiagnosticsSnapshot(&gps);
     SDLogger_Diagnostics sd=sd_diag; PPS_Diagnostics pps=Timebase_PPSSnapshot();
     GPS_TimeDiagnostics sync=GPS_Time_Diagnostics();
     uint64_t snapshot=Timebase_NowUs(); GPS_ConfigStatus config=*GPS_GetConfig();
@@ -80,6 +80,15 @@ FRESULT Session_Write(const char *dir)
     const GPS_ConfigStatus *c=&config;
     WRITE("  \"gps_uart_baud\": %lu, \"gps_configuration_state\": %u, \"gps_measurement_ms\": %u,\n",(unsigned long)c->baud,(unsigned)c->state,c->measurement_ms);
     WRITE("  \"gps_min_period_ms\": %lu, \"gps_max_period_ms\": %lu, \"gps_history_misses\": %lu,\n",(unsigned long)gps.min_period_ms,(unsigned long)gps.max_period_ms,(unsigned long)gps.history_misses);
+    const GPS_ReceiverStatus *rx=&gps.receiver;
+    WRITE("  \"gps_receiver_seen\": %u, \"gps_sol_fix_type\": %u, \"gps_sol_flags\": %u,\n",rx->seen,rx->fix_type,rx->sol_flags);
+    WRITE("  \"gps_sol_week\": %d, \"gps_sol_used_sats\": %u, \"gps_utc_valid_flags\": %u,\n",rx->week,rx->used_sats,rx->utc_flags);
+    WRITE("  \"gps_svinfo_channels\": %u, \"gps_sats_with_cno\": %u, \"gps_sats_code_locked\": %u, \"gps_max_cno_dbhz\": %u,\n",rx->sky_channels,rx->cno_nonzero,rx->code_locked,rx->cno_max);
+    WRITE("  \"gps_antenna_status\": %u, \"gps_antenna_power\": %u, \"gps_noise_per_ms\": %u, \"gps_agc_count\": %u,\n",rx->antenna_status,rx->antenna_power,rx->noise_per_ms,rx->agc_count);
+    WRITE("  \"gps_jamming_indicator\": %u, \"gps_hw_flags\": %u,\n",rx->jamming,rx->hw_flags);
+    WRITE("  \"gps_dynamic_model\": %u, \"gps_fix_mode\": %u, \"gps_power_mode\": %u,\n",rx->dynamic_model,rx->fix_mode,rx->power_mode);
+    WRITE("  \"gps_min_elevation_deg\": %d, \"gps_pdop_limit_x10\": %u,\n",rx->min_elevation,rx->pdop_limit);
+    STR("gps_receiver_seen_bits","SOL=1,UTC=2,SVINFO=4,MON_HW=8,NAV5=16,RXM=32; fields without bit are unknown");
     WRITE("  \"raw_ring_capacity\": 255, \"sd_queue_capacity\": 16, \"rotation_ms\": 180000,\n");
     WRITE("  \"imu_acquired\": %lu, \"imu_ring_dropped\": %lu, \"imu_spi_errors\": %lu,\n",(unsigned long)imu.acquired,(unsigned long)imu.dropped,(unsigned long)imu.spi_errors);
     WRITE("  \"imu_pair_errors\": %lu, \"imu_clipped\": %lu, \"max_pair_us\": %lu,\n",(unsigned long)imu.pair_errors,(unsigned long)imu.clipped,(unsigned long)imu.max_pair_us);
@@ -89,6 +98,7 @@ FRESULT Session_Write(const char *dir)
     WRITE("  \"gps_incomplete_epochs\": %lu, \"gps_late_fragments\": %lu, \"gps_bad_periods\": %lu,\n",(unsigned long)gps.incomplete,(unsigned long)gps.late,(unsigned long)gps.bad_period);
     WRITE("  \"sd_queue_dropped\": %lu, \"sd_written\": %lu, \"sd_max_pause_us\": %lu,\n",(unsigned long)sd_log_dropped,(unsigned long)sd_log_written,(unsigned long)sd_max_pause_us);
 #define U64(k,v) do { if (r==FR_OK) r=number64(&f,k,v); } while (0)
+    U64("gps_svinfo_rx_us",rx->sky_rx_us); U64("gps_mon_hw_rx_us",rx->hw_rx_us);
     U64("snapshot_t_us",snapshot); U64("sd_ready_us",sd.sd_ready_us); U64("imu_start_us",imu.start_us);
     U64("first_written_us",sd.first_written_us); U64("first_written_sample_us",sd.first_written_sample_us);
     WRITE("  \"first_written_nr\": %lu, \"last_acquired_nr\": %lu, \"last_written_nr\": %lu,\n",(unsigned long)sd.first_written_nr,(unsigned long)imu.acquired,(unsigned long)sd.last_written_nr);

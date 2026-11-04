@@ -282,6 +282,7 @@ static void test_pps_columns(void)
     assert(times && strstr(times+1,";4320000;4200000;1\r\n")); free(text);
     char *json=read_file("SESSION.json");
     assert(strstr(json,"\"time_sync_state\": 1") && strstr(json,"\"pps_model_period_ticks\": 1000000"));
+    assert(strstr(json,"\"gps_receiver_seen\": 3") && strstr(json,"\"gps_sol_fix_type\": 3") && strstr(json,"\"gps_sol_week\": 2400"));
     free(json); PPSTest_Clear();
 }
 int main(void)
