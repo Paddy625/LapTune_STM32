@@ -36,12 +36,10 @@ void Timebase_Init(void)
     uint32_t clock=Timebase_TimerHz(pclk,(RCC->CFGR>>8)&7U);
     timebase_config=(TimebaseConfig){pclk,clock,clock/1000000U-1U,clock/(clock/1000000U),65535};
     TIM2->CR1=0; TIM2->PSC=timebase_config.prescaler; TIM2->ARR=65535;
-    /* PA0 default TIM2_CH1 mapping, direct TI1 capture, rising edge, no filter. */
-    GPIO_InitTypeDef pin={.Pin=GPIO_PIN_0,.Mode=GPIO_MODE_INPUT,.Pull=GPIO_PULLDOWN};
-    HAL_GPIO_Init(GPIOA,&pin);
-    TIM2->CCMR1=TIM_CCMR1_CC1S_0; TIM2->CCER=TIM_CCER_CC1E;
+    /* GPS rollback: timer is for IMU timestamps only. PA0/PPS is not captured. */
+    TIM2->CCMR1=0; TIM2->CCER=0;
     TIM2->EGR=TIM_EGR_UG; TIM2->SR=0; TIM2->CNT=0;
-    TIM2->DIER=TIM_DIER_UIE|TIM_DIER_CC1IE;
+    TIM2->DIER=TIM_DIER_UIE;
     HAL_NVIC_SetPriority(TIM2_IRQn,0,0); HAL_NVIC_EnableIRQ(TIM2_IRQn);
     TIM2->CR1=TIM_CR1_CEN;
 #else

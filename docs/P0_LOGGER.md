@@ -1,3 +1,5 @@
+> **Aktualizacja 2.1.6:** GPS wrócił do odbioru NMEA 9600 baud / domyślnie 1 Hz. Konfiguracja 5 Hz, epoki UBX i PPS opisane poniżej są historyczne i nie działają w tej wersji. Aktualny przebieg i ograniczenia: [GPS_RESTORE.md](GPS_RESTORE.md).
+
 # Kontrakt loggera 2.1.0 (P0 + mapowanie PPS)
 
 **Aktualne zmiany 2.1.5:** [Jednorazowe przywrócenie GPS](GPS_RESTORE.md). Zmiany 2.1.4: [GPS bez automatycznych restartów i IMU bez SD](GPS_DIAGNOSTICS.md). [Mapowanie PPS](GPS_PPS.md). Historyczny przegląd P0: [P0_REVIEW_2026-11-02.md](P0_REVIEW_2026-11-02.md).

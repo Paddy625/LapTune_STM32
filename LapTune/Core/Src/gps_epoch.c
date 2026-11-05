@@ -18,6 +18,50 @@ static uint64_t last_valid_rx,stream_start_us;
 static int16_t last_week;
 static uint8_t have_itow;
 GPS_Diagnostics gps_diag;
+static uint8_t nmea_mode,nmea_parts,nmea_valid,have_nmea_key;
+static uint32_t nmea_key,last_nmea_key;
+static uint64_t nmea_first,last_nmea_rx;
+static GPS_Fix nmea_pending;
+static void nmea_publish(uint64_t now)
+{
+    if (!nmea_parts) return;
+    nmea_pending.position_valid=nmea_valid==nmea_parts;
+    nmea_pending.altitude_valid&=nmea_pending.position_valid;
+    nmea_pending.speed_valid&=nmea_pending.position_valid;
+    nmea_pending.published_us=now;
+    nmea_pending.fix_id=++sequence; nmea_pending.epoch_known=1; nmea_pending.nmea=1;
+    nmea_pending.meas_delay_us=UINT32_MAX;
+    ++gps_diag.received_epochs; ++gps_diag.epoch_count;
+    if (nmea_pending.position_valid) ++gps_diag.valid_epochs; else ++gps_diag.invalid_fixes;
+    if (have_nmea_key) {
+        uint32_t dt=(nmea_key+86400000U-last_nmea_key)%86400000U;
+        if (dt && dt<=3000) {
+            if (!gps_diag.min_period_ms || dt<gps_diag.min_period_ms) gps_diag.min_period_ms=dt;
+            if (dt>gps_diag.max_period_ms) gps_diag.max_period_ms=dt;
+            if (dt!=1000) ++gps_diag.bad_period;
+        }
+    }
+    last_nmea_key=nmea_key; last_nmea_rx=nmea_pending.rx_us; have_nmea_key=1;
+    history[history_head]=nmea_pending; history_head=(history_head+1U)%HISTORY;
+    if (history_count<HISTORY) ++history_count;
+    nmea_parts=nmea_valid=0;
+}
+static uint8_t nmea_time(const char *line,uint32_t *key)
+{
+    const char *p=strchr(line,','); if (!p || strlen(++p)<6) return 0;
+    unsigned h=0,m=0,sec=0,ms=0;
+    for (unsigned i=0;i<6;++i) if (p[i]<'0' || p[i]>'9') return 0;
+    h=(p[0]-'0')*10U+p[1]-'0'; m=(p[2]-'0')*10U+p[3]-'0'; sec=(p[4]-'0')*10U+p[5]-'0';
+    if (h>23 || m>59 || sec>59) return 0;
+    p+=6;
+    if (*p=='.') {
+        unsigned scale=100; ++p;
+        if (*p<'0' || *p>'9') return 0;
+        while (*p>='0' && *p<='9') { ms+=(*p++-'0')*scale; scale/=10; }
+    }
+    if (*p!=',') return 0;
+    *key=((h*60U+m)*60U+sec)*1000U+ms; return 1;
+}
 static uint32_t u32(const uint8_t *p) { return (uint32_t)p[0]|((uint32_t)p[1]<<8)|((uint32_t)p[2]<<16)|((uint32_t)p[3]<<24); }
 static int32_t i32(const uint8_t *p) { uint32_t n=u32(p); return n<=INT32_MAX ? (int32_t)n : (int32_t)((int64_t)n-4294967296LL); }
 static void remember(GPS_Fix fix)
@@ -38,12 +82,42 @@ static void invalidate(GPS_Data *d,uint64_t now)
 }
 void GPS_Epoch_Init(void)
 {
+    nmea_mode=nmea_parts=nmea_valid=have_nmea_key=0;
     memset(slots,0,sizeof(slots)); memset(history,0,sizeof(history)); memset(&gps_diag,0,sizeof(gps_diag));
     history_head=history_count=sequence=last_itow=have_itow=0; last_valid_rx=stream_start_us=0; last_week=0;
     GPS_Time_Init();
 }
+void GPS_Epoch_InitNMEA(void) { GPS_Epoch_Init(); nmea_mode=1; }
+void GPS_Epoch_NMEA(const GPS_Data *d,const char *line,uint64_t rx)
+{
+    uint32_t key;
+    if (!nmea_time(line,&key)) {
+        nmea_parts=nmea_valid=0;
+        GPS_Fix invalid={.published_us=rx,.rx_us=rx,.meas_delay_us=UINT32_MAX,.nmea=1};
+        remember(invalid); return;
+    }
+    uint8_t part=line[3]=='G' ? 1 : 2;
+    if (have_nmea_key && key==last_nmea_key && rx>=last_nmea_rx && rx-last_nmea_rx<3000000U) return;
+    if (nmea_parts && key!=nmea_key) nmea_publish(rx);
+    if (!nmea_parts) {
+        nmea_pending=(GPS_Fix){0}; nmea_first=rx; nmea_key=key; nmea_valid=0;
+    }
+    if (nmea_parts&part) return;
+    nmea_parts|=part; nmea_pending.rx_us=rx;
+    if (d->position_valid) {
+        nmea_valid|=part;
+        /* Prefer RMC coordinates when both members of this UTC epoch exist. */
+        if (part==2 || !(nmea_parts&2)) {
+            nmea_pending.latitude_e7=d->latitude_e7; nmea_pending.longitude_e7=d->longitude_e7;
+        }
+    }
+    if (part==1) { nmea_pending.altitude_valid=d->altitude_valid; nmea_pending.altitude_mm=d->altitude_mm; }
+    else { nmea_pending.speed_valid=d->speed_valid; nmea_pending.speed_millikmh=d->speed_millikmh; }
+    if (nmea_parts==3) nmea_publish(rx);
+}
 void GPS_Epoch_ResetStream(GPS_Data *d,uint64_t now)
 {
+    nmea_parts=nmea_valid=have_nmea_key=0;
     invalidate(d,now); memset(slots,0,sizeof(slots)); have_itow=0; stream_start_us=now;
     d->connected=d->datetime_valid=d->receiver_fix_valid=0;
     GPS_Time_Reset();
@@ -170,6 +244,12 @@ void GPS_Epoch_Packet(GPS_Data *d,uint8_t cls,uint8_t id,const uint8_t *p,unsign
 }
 void GPS_Epoch_Service(GPS_Data *d,uint64_t now)
 {
+    if (nmea_mode) {
+        /* Default 9600 baud also carries GLL/GSA/GSV/VTG. Allow a full cycle
+           for the matching RMC/GGA; publish a partial epoch without stale fields. */
+        if (nmea_parts && now>=nmea_first && now-nmea_first>=800000U) nmea_publish(now);
+        return; /* Live TFT validity remains exactly the legacy NMEA parser's. */
+    }
     /* Oldest pending epoch first; a later fragment cannot revise a published fix. */
     for (unsigned n=0;n<4;++n) {
         Slot *old=NULL;
@@ -195,7 +275,7 @@ void GPS_Epoch_ForWindow(uint64_t sample,uint64_t midpoint,GPS_Fix *out)
         }
     }
     if (!found) { if (history_count) ++gps_diag.history_misses; return; }
-    if (sample>=best && sample-best>=GPS_EPOCH_TIMEOUT_US)
+    if (sample>=best && sample-best>=(out->nmea ? 3000000ULL : GPS_EPOCH_TIMEOUT_US))
         out->position_valid=out->speed_valid=out->altitude_valid=0;
 }
 void GPS_Epoch_ForSample(uint64_t sample,GPS_Fix *out) { GPS_Epoch_ForWindow(sample,sample,out); }

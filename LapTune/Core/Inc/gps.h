@@ -6,9 +6,9 @@
 #include "gps_epoch.h"
 
 #define GPS_BOOT_BAUD 9600U
-#define GPS_RUN_BAUD 38400U
-#define GPS_MEASUREMENT_MS 200U
-typedef enum { GPS_CONFIG_PENDING, GPS_CONFIG_READY, GPS_CONFIG_ERROR } GPS_ConfigState;
+#define GPS_RUN_BAUD 9600U
+#define GPS_MEASUREMENT_MS 1000U
+typedef enum { GPS_CONFIG_PENDING, GPS_CONFIG_READY, GPS_CONFIG_ERROR, GPS_CONFIG_PASSIVE } GPS_ConfigState;
 typedef enum { GPS_CFG_OK, GPS_CFG_NO_RESPONSE, GPS_CFG_NAK, GPS_CFG_VERIFY, GPS_CFG_UART } GPS_ConfigError;
 typedef enum { GPS_RESTORE_NONE, GPS_RESTORE_PENDING, GPS_RESTORE_DEFAULTS_SENT,
                GPS_RESTORE_COLD_SENT, GPS_RESTORE_RECONFIGURED, GPS_RESTORE_FAILED } GPS_RestoreState;
@@ -18,8 +18,8 @@ typedef struct {
     uint32_t baud;
     uint16_t measurement_ms,nav_rate,time_ref;
     uint8_t message_id,attempts;
-    uint8_t pps_state,pps_error; /* pending=0, verified=1, unavailable/error=2 */
-    uint8_t acquisition_only; /* legacy GGA/RMC startup; UBX/PPS enabled after first fix */
+    uint8_t pps_state,pps_error; /* Legacy metadata field; PPS disabled in the NMEA rollback. */
+    uint8_t acquisition_only; /* Legacy metadata field; no post-fix mode transition. */
     uint8_t restore_state,restore_error,restore_ack;
 } GPS_ConfigStatus;
 
@@ -30,10 +30,10 @@ void GPS_OnRxComplete(UART_HandleTypeDef *uart);
 void GPS_OnTxComplete(UART_HandleTypeDef *uart);
 void GPS_DiagnosticsSnapshot(GPS_Diagnostics *out);
 void GPS_OnError(UART_HandleTypeDef *uart);
-/* Main loop only: drain IRQ queue, assemble UBX epochs and expire stale fields. */
+/* Main loop: legacy GGA/RMC receive path. No runtime GPS configuration. */
 void GPS_Process(uint32_t now);
 const GPS_Data *GPS_GetData(void);
-/* READY means UART, UBX/NMEA message rates and CFG-RATE were read back successfully. */
+/* READY = defaults read back this boot; PASSIVE = receive only, no readback. */
 const GPS_ConfigStatus *GPS_GetConfig(void);
 const char *GPS_SoftwareVersion(void);
 const char *GPS_HardwareVersion(void);

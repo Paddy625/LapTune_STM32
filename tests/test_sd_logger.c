@@ -285,10 +285,25 @@ static void test_pps_columns(void)
     assert(strstr(json,"\"gps_receiver_seen\": 3") && strstr(json,"\"gps_sol_fix_type\": 3") && strstr(json,"\"gps_sol_week\": 2400"));
     free(json); PPSTest_Clear();
 }
+static void test_nmea_columns(void)
+{
+    fresh_card(0); GPS_Epoch_InitNMEA(); SDLogger_Start();
+    GPS_Data d={.position_valid=1,.altitude_valid=1,.speed_valid=1,
+        .latitude_e7=521234567,.longitude_e7=215678901,.altitude_mm=123456,.speed_millikmh=44424};
+    GPS_Epoch_NMEA(&d,"$GPGGA,120000,",1000000);
+    GPS_Epoch_NMEA(&d,"$GPRMC,120000,",1100000);
+    mono=1200000; tick=1200;
+    ImuRecord a=record(1,1100000),b=record(2,1109615);
+    assert(append_raw(&a,(LogTime){0}) && append_raw(&b,(LogTime){0}));
+    stop(); char *text=read_log("LOG0001.TXT",2);
+    assert(strstr(text,";52.1234567;21.5678901;44.424;123.456;1100000;N;1;;"));
+    assert(strstr(text,";1109615;R;1;;") && strstr(text,";1100000;;0\r\n"));
+    free(text);
+}
 int main(void)
 {
     image=malloc(SECTORS*512U); assert(image);
-    test_contract(); test_pps_columns(); test_metadata_boundaries(); test_sync_not_retroactive(); test_integer_limits(); test_rotation_and_pause(); test_retry_and_card_change(); test_overload_and_failures(); test_full_and_30_minutes();
+    test_contract(); test_pps_columns(); test_metadata_boundaries(); test_sync_not_retroactive(); test_integer_limits(); test_rotation_and_pause(); test_retry_and_card_change(); test_overload_and_failures(); test_full_and_30_minutes(); test_nmea_columns();
     assert(f_mount(NULL,"",0)==FR_OK); free(image);
     puts("PASS SD/FatFs: 36-column contract, exact uint64/scales, GPS N/R/I, JSON/LFN, session separation, rotation/retry/removal/full/overload, 30 virtual minutes");
     return 0;

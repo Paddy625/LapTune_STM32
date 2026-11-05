@@ -268,7 +268,7 @@ static unsigned format(char out[512],const struct Record *r,uint32_t prior_fix)
     }
     if (r->gps.epoch_known) {
         (void)snprintf(id,sizeof(id),"%lu",(unsigned long)r->gps.fix_id);
-        (void)snprintf(itow,sizeof(itow),"%lu",(unsigned long)r->gps.itow_ms);
+        if (!r->gps.nmea) (void)snprintf(itow,sizeof(itow),"%lu",(unsigned long)r->gps.itow_ms);
     }
     if (r->gps.speed_valid)
         fixed(navigation[2],r->gps.speed_millikmh,1000,3);

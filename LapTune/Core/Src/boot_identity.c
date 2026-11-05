@@ -41,7 +41,7 @@ uint8_t BootIdentity_Init(void)
         if (crc==checksum(n)) {
             /* Old firmware left this halfword erased. Scan all committed
                records so a temporary downgrade does not immediately rearm. */
-            if (BootFlash_Read(at+12)==0x4752) restore_reserved=1;
+            if (BootFlash_Read(at+12)==0x4753) restore_reserved=1;
             if (n>best) { best=n; best_at=at; }
         }
     }
@@ -57,7 +57,8 @@ uint8_t BootIdentity_Init(void)
     for (unsigned i=0;i<4 && ok;++i) ok=BootFlash_Program(at+2*i,(uint16_t)(n>>(16*i)));
     if (ok) ok=BootFlash_Program(at+8,(uint16_t)crc);
     if (ok) ok=BootFlash_Program(at+10,(uint16_t)(crc>>16));
-    if (ok) ok=BootFlash_Program(at+12,0x4752);
+    /* New reservation: 2.1.5's 0x4752 restored defaults then reapplied 5 Hz. */
+    if (ok) ok=BootFlash_Program(at+12,0x4753);
     /* Commit last: an interrupted reservation is never exposed as a boot ID. */
     if (ok) ok=BootFlash_Program(at+14,0x4C54);
 #ifndef LAPTUNE_HOST_TEST

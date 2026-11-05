@@ -28,7 +28,7 @@ int main(void)
     }
     assert(strlen(old)==42);
     /* First migration: old records used 0xFFFF at offset 12. */
-    memset(flash,255,sizeof(flash)); assert(BootIdentity_Init()); flash[6]=0xFFFF;
+    memset(flash,255,sizeof(flash)); assert(BootIdentity_Init()); flash[6]=0x4752; /* 2.1.5 reservation must not suppress the 1 Hz rollback. */
     assert(BootIdentity_Init()); assert(BootIdentity_Counter()==2); assert(BootIdentity_TakeGPSRestore());
     /* Power loss after reservation, before UART: never restart GPS on every boot. */
     assert(BootIdentity_Init()); assert(!BootIdentity_TakeGPSRestore());

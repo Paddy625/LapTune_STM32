@@ -1,3 +1,5 @@
+> **Aktualizacja 2.1.6:** GPS wrócił do odbioru NMEA 9600 baud / domyślnie 1 Hz. Konfiguracja 5 Hz, epoki UBX i PPS opisane poniżej są historyczne i nie działają w tej wersji. Aktualny przebieg i ograniczenia: [GPS_RESTORE.md](GPS_RESTORE.md).
+
 # Diagnostyka NO FIX — firmware 2.1.5
 
 ## Aktualna wersja 2.1.5

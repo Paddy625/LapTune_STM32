@@ -14,7 +14,7 @@ with (folder / 'LOG0001.TXT').open(encoding='ascii', newline='') as stream:
     assert reader.fieldnames[:13] == [
         'NR', 'DATA', 'CZAS', 'ACC_X', 'ACC_Y', 'ACC_Z', 'GYRO_X', 'GYRO_Y', 'GYRO_Z',
         'GPS_LAT', 'GPS_LON', 'GPS_SPEED_KMH', 'GPS_ALT_MSL_M']
-assert metadata['format_version'] == 4 and metadata['pps_enabled'] is True
+assert metadata['format_version'] == 4 and metadata['pps_enabled'] is False
 assert metadata['time_sync_state'] == 0 and metadata['pair_limit_us'] == 500
 assert len(rows) == 6
 assert [row['GPS_STATE'] for row in rows] == ['I', 'N', 'R', 'N', 'N', 'I']

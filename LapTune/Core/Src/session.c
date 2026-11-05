@@ -62,12 +62,14 @@ FRESULT Session_Write(const char *dir)
     STR("gps_software",GPS_SoftwareVersion()); STR("gps_hardware",GPS_HardwareVersion());
     STR("time_source","TIM2 16-bit + overflow extension, nominal 1 MHz HSI PLL");
     STR("imu_timestamp","later ACC/GYRO DRDY IRQ; no bus/read/write timestamp reconstruction");
-    STR("gps_row_time","PPS-mapped GPS epoch assigned to nearest buffered IMU row; RX kept separately");
-    STR("utc","UTC from valid NAV-TIMEUTC and PPS affine map; empty in logs before lock");
+    STR("gps_row_time","NMEA GGA/RMC paired by UTC-of-day; assigned by UART RX/publication, not measurement time");
+    STR("utc","Approximate UTC extrapolated from RMC reception, as in 1fd016f; no PPS synchronization");
     STR("axis_frame","sensor PCB XYZ; no vehicle rotation, gravity removal or startup zeroing");
     STR("invalid_imu","six empty vector fields; IMU_FLAGS: SPI=1,FRESH=2,PAIR=4,CLIP=8,TIMEOUT=16");
+    STR("gps_profile","1fd016f: default 1Hz/9600/NMEA; no UBX NAV or PPS configuration");
+    STR("gps_epoch_identity","local sequence for matched NMEA UTC-of-day; GPS_ITOW_MS and GPS_T_MEAS_US empty, TIME_SYNC_STATE=0");
     STR("gps_states","N=new valid epoch once, R=immutable repetition, I=no valid position");
-    WRITE("  \"time_sync_state\": %u, \"t_imu_unit\": \"us\", \"pps_enabled\": true,\n",sync.state);
+    WRITE("  \"time_sync_state\": %u, \"t_imu_unit\": \"us\", \"pps_enabled\": false,\n",sync.state);
     WRITE("  \"imu_odr_hz\": 104, \"acc_range_g\": 16, \"gyro_range_dps\": 2000,\n");
     WRITE("  \"acc_g_per_lsb\": 0.000488, \"gyro_dps_per_lsb\": 0.070,\n");
     WRITE("  \"who_am_i\": %u,\n",lsm6ds3_registers[5]);
@@ -76,7 +78,7 @@ FRESULT Session_Write(const char *dir)
     WRITE("],\n");
     WRITE("  \"filters\": \"unchanged sensor defaults plus CTRL1/2/3/4 above; group delay NOT bench validated\",\n");
     WRITE("  \"pair_limit_us\": %u, \"timestamp_accuracy_validated\": false,\n",IMU_PAIR_LIMIT_US);
-    WRITE("  \"gps_timeout_us\": 800000, \"gps_assembly_deadline_us\": 180000, \"gps_nominal_hz\": 5,\n");
+    WRITE("  \"gps_timeout_us\": 3000000, \"gps_assembly_deadline_us\": 800000, \"gps_nominal_hz\": 1,\n");
     const GPS_ConfigStatus *c=&config;
     WRITE("  \"gps_uart_baud\": %lu, \"gps_configuration_state\": %u, \"gps_measurement_ms\": %u,\n",(unsigned long)c->baud,(unsigned)c->state,c->measurement_ms);
     WRITE("  \"gps_acquisition_only\": %u, \"gps_nmea_sentences\": %lu, \"gps_nmea_fix_sentences\": %lu,\n",c->acquisition_only,(unsigned long)gps.nmea_sentences,(unsigned long)gps.nmea_fix_sentences);
@@ -84,9 +86,9 @@ FRESULT Session_Write(const char *dir)
     if (r==FR_OK) r=number64(&f,"gps_nmea_last_fix_us",gps.nmea_last_fix_us);
     WRITE("  \"gps_recovery_attempts\": %lu,\n",(unsigned long)gps.recovery_attempts);
     if (r==FR_OK) r=number64(&f,"gps_recovery_us",gps.recovery_us);
-    STR("gps_recovery_reason","2.1.5 one-time reserved cold-start TX attempt only; NO FIX never triggers a reset");
+    STR("gps_recovery_reason","2.1.6 factory rollback once; passive NMEA afterwards; NO FIX never triggers a reset");
     WRITE("  \"gps_restore_state\": %u, \"gps_restore_error\": %u, \"gps_restore_ack\": %u,\n",c->restore_state,c->restore_error,c->restore_ack);
-    STR("gps_restore_states","0=not requested this boot,1=pending,2=defaults TX,3=cold TX,4=5Hz reconfigured,5=failed; 4 is not RF/fix or factory-state verification");
+    STR("gps_restore_states","0=not requested this boot,1=pending,2=defaults TX,3=cold TX,4=factory 9600/1Hz/NMEA read back,5=failed; 4 is not RF/fix verification");
     WRITE("  \"gps_min_period_ms\": %lu, \"gps_max_period_ms\": %lu, \"gps_history_misses\": %lu,\n",(unsigned long)gps.min_period_ms,(unsigned long)gps.max_period_ms,(unsigned long)gps.history_misses);
     const GPS_ReceiverStatus *rx=&gps.receiver;
     WRITE("  \"gps_receiver_seen\": %u, \"gps_sol_fix_type\": %u, \"gps_sol_flags\": %u,\n",rx->seen,rx->fix_type,rx->sol_flags);
@@ -123,11 +125,11 @@ FRESULT Session_Write(const char *dir)
     WRITE("  \"raw_record_bytes\": %u, \"sd_record_bytes\": %u, \"raw_ring_high_water\": %lu, \"sd_queue_high_water\": %lu, \"sd_queue_depth\": %lu,\n",(unsigned)sizeof(ImuRecord),SDLogger_RecordBytes(),(unsigned long)imu.high_water,(unsigned long)sd.queue_high_water,(unsigned long)sd.queue_depth);
     WRITE("  \"static_ram_bytes\": %lu, \"stack_reserved_bytes\": %lu, \"stack_free_min_bytes\": %lu, \"heap_used_bytes\": %lu,\n",(unsigned long)MemoryDiag_StaticBytes(),(unsigned long)MemoryDiag_StackReserved(),(unsigned long)MemoryDiag_StackFreeMin(),(unsigned long)MemoryDiag_HeapUsed());
     WRITE("  \"timer_pclk1_hz\": %lu, \"timer_input_hz\": %lu, \"timer_prescaler\": %lu, \"timer_tick_hz\": %lu, \"timer_arr\": %lu,\n",(unsigned long)timebase_config.pclk1_hz,(unsigned long)timebase_config.timer_hz,(unsigned long)timebase_config.prescaler,(unsigned long)timebase_config.tick_hz,(unsigned long)timebase_config.reload);
-    WRITE("  \"pps_capture_enabled\": true, \"pps_reference_validated\": false, \"pps_pulses\": %lu, \"pps_periods\": %lu,\n",(unsigned long)pps.pulses,(unsigned long)pps.periods);
+    WRITE("  \"pps_capture_enabled\": false, \"pps_reference_validated\": false, \"pps_pulses\": %lu, \"pps_periods\": %lu,\n",(unsigned long)pps.pulses,(unsigned long)pps.periods);
     U64("pps_last_capture_us",pps.last_capture_us);
     WRITE("  \"pps_last_period_ticks\": %lu, \"pps_min_period_ticks\": %lu, \"pps_max_period_ticks\": %lu,\n",(unsigned long)pps.last_period_us,(unsigned long)pps.min_period_us,(unsigned long)pps.max_period_us);
     WRITE("  \"pps_mean_period_ticks\": %lu, \"pps_capture_overruns\": %lu, \"pps_rejected_periods\": %lu,\n",(unsigned long)(pps.periods ? pps.sum_period_us/pps.periods : 0),(unsigned long)pps.overruns,(unsigned long)pps.rejected_periods);
-    STR("pps_semantics","PA0 rising capture + GPS-referenced TIM-TP next-pulse label; 3 pairs and NAV latency cross-check; MCU timer never stepped");
+    STR("pps_semantics","disabled for GPS rollback; PA0 can remain wired; IMU timer continues");
     WRITE("  \"pps_configuration_state\": %u, \"pps_configuration_error\": %u,\n",config.pps_state,config.pps_error);
     WRITE("  \"pps_timtp_packets\": %lu, \"pps_matched\": %lu, \"pps_rejected\": %lu,\n",(unsigned long)sync.timtp_packets,(unsigned long)sync.matched,(unsigned long)sync.rejected);
     WRITE("  \"pps_locks\": %lu, \"pps_losses\": %lu, \"pps_period_change_ticks\": %lu,\n",(unsigned long)sync.locks,(unsigned long)sync.losses,(unsigned long)sync.period_change_ticks);
@@ -142,7 +144,7 @@ FRESULT Session_Write(const char *dir)
         WRITE("  \"gps_uart_%s_%s\": %lu,\n",phases[phase],errors[error],(unsigned long)gps.uart_by_phase[phase][error]);
     WRITE("  \"gps_checksum_init\": %lu, \"gps_checksum_run\": %lu, \"gps_tx_errors\": %lu,\n",(unsigned long)gps.checksum_by_phase[0],(unsigned long)gps.checksum_by_phase[1],(unsigned long)gps.tx_errors);
     WRITE("  \"gps_received_epochs\": %lu, \"gps_published_epochs\": %lu, \"gps_valid_epochs\": %lu, \"gps_invalid_fixes\": %lu,\n",(unsigned long)gps.received_epochs,(unsigned long)gps.epoch_count,(unsigned long)gps.valid_epochs,(unsigned long)gps.invalid_fixes);
-    STR("gps_configuration_states","0=pending/configuring,1=READY (ACK+readback),2=ERROR; READY does not imply fix, UTC or PPS lock");
+    STR("gps_configuration_states","0=factory restore pending,1=defaults readback OK,2=restore error,3=passive NMEA without readback this boot; no state implies fix");
 #undef U64
     WRITE("  \"antenna_imu_lever_arm_m\": null, \"mounting_calibration\": \"desktop application\"\n}\n");
     if (r==FR_OK) r=f_sync(&f);

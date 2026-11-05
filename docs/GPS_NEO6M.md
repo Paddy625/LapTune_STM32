@@ -1,3 +1,5 @@
+> **Aktualizacja 2.1.6:** GPS wrócił do odbioru NMEA 9600 baud / domyślnie 1 Hz. Konfiguracja 5 Hz, epoki UBX i PPS opisane poniżej są historyczne i nie działają w tej wersji. Aktualny przebieg i ograniczenia: [GPS_RESTORE.md](GPS_RESTORE.md).
+
 # GPS u-blox NEO-6M — firmware 2.1.5
 
 **2.1.5:** [jednorazowe przywrócenie GPS i instrukcja próby](GPS_RESTORE.md).

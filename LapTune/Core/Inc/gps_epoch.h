@@ -10,6 +10,7 @@ typedef struct {
     uint32_t meas_delay_us; /* rx_us - measurement_us; UINT32_MAX when not mapped. */
     uint8_t position_valid:1,speed_valid:1,altitude_valid:1,epoch_known:1;
     uint8_t time_valid:1,time_sync_state:2,discarded_incomplete:1;
+    uint8_t nmea; /* Local UTC-of-day epoch ID only; no GPS iTOW or PPS map. */
 } GPS_Fix;
 enum { GPS_RX_SOL=1, GPS_RX_UTC=2, GPS_RX_SKY=4, GPS_RX_HW=8, GPS_RX_NAV5=16, GPS_RX_POWER=32 };
 typedef struct {
@@ -35,6 +36,9 @@ typedef struct {
 } GPS_Diagnostics;
 extern GPS_Diagnostics gps_diag;
 void GPS_Epoch_Init(void);
+void GPS_Epoch_InitNMEA(void);
+/* Called only for a sentence already accepted by the legacy NMEA parser. */
+void GPS_Epoch_NMEA(const GPS_Data *data,const char *line,uint64_t rx_us);
 void GPS_Epoch_ResetStream(GPS_Data *data,uint64_t now);
 void GPS_Epoch_Packet(GPS_Data *data,uint8_t cls,uint8_t id,const uint8_t *payload,unsigned len,uint64_t now);
 void GPS_Epoch_Service(GPS_Data *data,uint64_t now);

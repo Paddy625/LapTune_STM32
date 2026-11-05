@@ -6,7 +6,7 @@ HAL_StatusTypeDef GPSDisplay_Update(uint32_t now, const GPS_Data *data,const GPS
 {
     static uint32_t last_refresh;
     static uint8_t started;
-    if (started && (uint32_t)(now-last_refresh)<GPS_MEASUREMENT_MS) return HAL_OK;
+    if (started && (uint32_t)(now-last_refresh)<500U) return HAL_OK;
     GPS_Data snapshot=*data;
     GPS_ConfigStatus config_snapshot={0}; uint8_t has_config=config!=NULL;
     if (has_config) config_snapshot=*config;
@@ -20,16 +20,8 @@ HAL_StatusTypeDef GPSDisplay_Update(uint32_t now, const GPS_Data *data,const GPS
                 (void)snprintf(text,sizeof(text),"GPS RESTORE %u/3",config_snapshot.restore_state);
                 valid=0; break;
             }
-            if (!snapshot.connected && has_config && config_snapshot.state!=GPS_CONFIG_READY) {
-                (void)snprintf(text,sizeof(text),"GPS %s",config_snapshot.state==GPS_CONFIG_ERROR ? "CFG ERROR" : "SETUP");
-                valid=0; break;
-            }
-            if (!snapshot.connected) (void)snprintf(text, sizeof(text), "GPS NO DATA");
-            else if (!snapshot.position_valid && snapshot.receiver_fix_valid) (void)snprintf(text,sizeof(text),"GPS FIX WAIT DATA S:%02u",snapshot.satellites);
-            else if (has_config && config_snapshot.state==GPS_CONFIG_READY) (void)snprintf(text,sizeof(text),"GPS %s 5HZ S:%02u",
-                                              snapshot.position_valid ? "FIX" : "NO FIX",snapshot.satellites);
-            else (void)snprintf(text, sizeof(text), "GPS %s S:%02u",
-                               snapshot.position_valid ? "FIX" : "NO FIX", snapshot.satellites);
+            if (!snapshot.connected) (void)snprintf(text,sizeof(text),"GPS NO DATA");
+            else (void)snprintf(text,sizeof(text),"GPS %s S:%02u",snapshot.position_valid ? "FIX" : "NO FIX",snapshot.satellites);
             valid = snapshot.position_valid;
             break;
         case 1:
@@ -56,7 +48,7 @@ HAL_StatusTypeDef GPSDisplay_Update(uint32_t now, const GPS_Data *data,const GPS
         }
         case 4:
             valid = snapshot.datetime_valid;
-            if (valid) (void)snprintf(text, sizeof(text), "%s %02u:%02u:%02u",snapshot.time_sync_state ? "UTC PPS" : "UTC",
+            if (valid) (void)snprintf(text, sizeof(text), "UTC %02u:%02u:%02u",
                                      snapshot.hour, snapshot.minute, snapshot.second);
             else (void)snprintf(text, sizeof(text), "UTC --:--:--");
             break;
