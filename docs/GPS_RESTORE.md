@@ -1,3 +1,5 @@
+> **2.1.8:** [aktualna procedura](GPS_CONFIG_QUERY.md) wykonuje jeden test maski wyjściowej UART1, pełny przegląd publicznej konfiguracji i okresowy odczyt stanu GPS. Bez resetu i zapisu ustawień do pamięci nieulotnej.
+
 > **2.1.7:** aktualna wersja tylko odczytuje ustawienia do [GPS_CFG.TXT](GPS_CONFIG_QUERY.md). Nie uruchamia procedury przywracania ani resetu opisanej w historii poniżej.
 
 # Powrót GPS do profilu sprzed 5 Hz — 2.1.6

@@ -87,7 +87,7 @@ FRESULT Session_Write(const char *dir)
     if (r==FR_OK) r=number64(&f,"gps_nmea_last_fix_us",gps.nmea_last_fix_us);
     WRITE("  \"gps_recovery_attempts\": %lu,\n",(unsigned long)gps.recovery_attempts);
     if (r==FR_OK) r=number64(&f,"gps_recovery_us",gps.recovery_us);
-    STR("gps_recovery_reason","2.1.7 read-only queries; no restore/reset/set/save commands");
+    STR("gps_recovery_reason","2.1.8 UART1 out mask 0x0007 to 0x0003 test; no restore/reset/save");
     WRITE("  \"gps_restore_state\": %u, \"gps_restore_error\": %u, \"gps_restore_ack\": %u,\n",c->restore_state,c->restore_error,c->restore_ack);
     STR("gps_restore_states","0=not requested this boot,1=pending,2=defaults TX,3=cold TX,4=factory 9600/1Hz/NMEA read back,5=failed; 4 is not RF/fix verification");
     WRITE("  \"gps_min_period_ms\": %lu, \"gps_max_period_ms\": %lu, \"gps_history_misses\": %lu,\n",(unsigned long)gps.min_period_ms,(unsigned long)gps.max_period_ms,(unsigned long)gps.history_misses);
@@ -145,7 +145,7 @@ FRESULT Session_Write(const char *dir)
         WRITE("  \"gps_uart_%s_%s\": %lu,\n",phases[phase],errors[error],(unsigned long)gps.uart_by_phase[phase][error]);
     WRITE("  \"gps_checksum_init\": %lu, \"gps_checksum_run\": %lu, \"gps_tx_errors\": %lu,\n",(unsigned long)gps.checksum_by_phase[0],(unsigned long)gps.checksum_by_phase[1],(unsigned long)gps.tx_errors);
     WRITE("  \"gps_received_epochs\": %lu, \"gps_published_epochs\": %lu, \"gps_valid_epochs\": %lu, \"gps_invalid_fixes\": %lu,\n",(unsigned long)gps.received_epochs,(unsigned long)gps.epoch_count,(unsigned long)gps.valid_epochs,(unsigned long)gps.invalid_fixes);
-    STR("gps_configuration_states","3=NMEA plus read-only queries; legacy states 0/1/2 unused; query statuses are in GPS_CFG.TXT");
+    STR("gps_configuration_states","3=NMEA with configuration queries and volatile UART1 mask test; results in GPS_CFG.TXT");
 #undef U64
     WRITE("  \"antenna_imu_lever_arm_m\": null, \"mounting_calibration\": \"desktop application\"\n}\n");
     if (r==FR_OK) r=f_sync(&f);

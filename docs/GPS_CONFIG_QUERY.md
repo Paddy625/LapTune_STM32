@@ -1,85 +1,123 @@
-# Odczyt konfiguracji GPS przez logger — 2.1.7
+# Konfiguracja GPS i test maski UART — 2.1.8
 
-Podłącz przy wyłączonym zasilaniu **PB10 / TX USART3 Nucleo → RX GPS**.
-Zostaw **TX GPS → PB11 / RX USART3** oraz wspólną masę. Bez przewodu PB10 → RX
-odbiornik nadal może nadawać NMEA, ale nie otrzyma zapytań i raport pokaże TIMEOUT.
-Nie potrzeba u-center ani adaptera. UART pozostaje 9600 baud.
+## Wgranie i zebranie wyników
 
-Wgraj `main` przez zwykły Clean/Build; TFT musi pokazać LAPTUNE 2.1.7.
-Z kartą SD poczekaj około 2 minut, następnie B1 i SD SAVED. Prześlij
-**GPS_CFG.TXT i SESSION.json z tego samego folderu sesji**. Nie trzeba czekać
-na uzyskanie pozycji. Pliki pomiarowe LOGnnnn.TXT nadal powstają normalnie.
+Połączenia: **PB10/TX USART3 → RX GPS**, **TX GPS → PB11/RX USART3**, wspólna masa.
+UART pozostaje 9600 baud. Pobierz main, Clean/Build, wgraj; TFT: LAPTUNE 2.1.8.
+Uruchom z kartą SD na zewnątrz na **15–20 minut**. B1, poczekaj na SD SAVED,
+prześlij **GPS_CFG.TXT oraz SESSION.json** z tego samego folderu sesji.
 
-## Co jest wysyłane
+Raport ma 150 etapów: 90 dla konfiguracji/testu i 60 dla 20 serii obserwacji.
+`CONFIG_READ_COMPLETE` oznacza zakończenie pierwszych 90 etapów, a końcowe
+`COMPLETE` zakończenie całości. Nie oznacza to poprawnego fixa ani uzyskania
+wszystkich odpowiedzi — sprawdź status każdego odczytu. Przerwanie testu wcześniej
+pozostawia użyteczny częściowy raport. Odczyt konfiguracji może potrwać kilka minut,
+zwłaszcza gdy funkcje niedostępne w NEO-6M nie odpowiadają na zapytania.
 
-Wyłącznie 21 zapytań UBX (poll):
+## Jedyna zmiana w odbiorniku
 
-- MON-VER; CFG-PRT dla UART1; CFG-RATE; CFG-NAV5; CFG-RXM; CFG-TP; CFG-ANT.
-- CFG-MSG dla GGA, GLL, GSA, GSV, RMC, VTG, NAV-POSLLH, NAV-VELNED,
-  NAV-SOL, NAV-TIMEUTC i TIM-TP.
-- NAV-STATUS, NAV-SVINFO, MON-HW.
+1. MON-VER i `UART1-BEFORE`: odczyt oryginalnych 20 bajtów CFG-PRT.
+2. NAV-STATUS/SVINFO/MON-HW przed zmianą, jako wczesny punkt odniesienia.
+3. `UART1-MASK-SET`: tylko jeśli prawidłowa odpowiedź dotyczy UART1/9600 baud
+   i maski wyjściowej 0x0007. Kopiujemy cały payload, zmieniamy wyłącznie
+   bajty 14–15 na `03 00` i wysyłamy CFG-PRT dokładnie raz na start MCU.
+4. `UART1-VERIFY`: odczyt i porównanie maski 0x0003 oraz pozostałych 18 bajtów
+   z oryginałem. ACK samo nie wystarcza. Zmiana baudrate, trybu portu, maski
+   wejściowej czy dowolnego innego bajtu przez odbiornik daje VERIFY_FAILED.
 
-Nadajnik korzysta z zamkniętej listy zapytań z payloadem 0, 1 lub 2 bajty.
-W kodzie GPS nie ma CFG-CFG, CFG-RST ani setterów CFG-PRT/RATE/MSG/TP.
-Stara rezerwacja przywrócenia w STM32 nie uruchamia niczego w tej wersji.
-Nie zmieniamy modelu nawigacji, częstotliwości pomiarów, ustawień PPS ani
-pamięci konfiguracji modułu. Poll nie włącza cyklicznego nadawania wiadomości.
+Jeśli maska już wynosi 0x0003, zapis jest pomijany. Inna wartość, brak odpowiedzi,
+NAK lub niezgodna długość bazowego odczytu również nie uprawniają do zapisu.
+Timeout/błąd nadawania/NAK podczas setteru nie powoduje ponowienia setteru.
+Odczyt kontrolny następuje także po braku ACK, gdyż ACK może zaginąć.
 
-Pierwsze zapytanie jest wysyłane po 3 s. Każde ma do dwóch prób i 1,5 s
-oczekiwania na odpowiedź. Pomiędzy zapisanymi wynikami jest co najmniej 250 ms.
-Po zapisaniu ostatniego wyniku nie wysyłamy kolejnych zapytań do restartu STM32.
-Brak karty nie blokuje IMU ani odbioru GPS: pierwszy wynik czeka w RAM na zapis,
-a kolejne zapytania są wstrzymane. Po włożeniu karty seria jest kontynuowana.
-Odczyt jest migawką z czasu zapytań, nie ciągłą diagnostyką przez całą sesję.
+Nie wysyłamy CFG-CFG, CFG-NVS, CFG-RST ani innych setterów. Zmiana jest bieżąca,
+bez polecenia utrwalenia. Reset/utrata zasilania odbiornika może ją cofnąć;
+stan zachowany przez podtrzymanie modułu zależy od jego zasilania. Restart samego
+STM32 przy masce już 0x0003 nie powoduje dodatkowego zapisu do GPS.
 
-## Format raportu
+`mask_change` w każdym rekordzie opisuje stan testu:
 
-Każdy rekord ma BEGIN z numerem, czasem w ms od startu TIM2, nazwą zapytania,
-liczbą prób i wynikiem; następnie surową ramkę UBX w HEX, dekodowanie i END.
-BEGIN bez odpowiadającego END jest niekompletnym zapisem. Ponowienie po błędzie
-karty może dopisać ten sam numer ponownie — pełny późniejszy rekord jest ważny.
-Po ostatnim rekordzie pojawia się COMPLETE. Oznacza ukończenie prób, nie
-sukces wszystkich odczytów ani poprawny fix.
+- NO_BASELINE — brak poprawnego odczytu bazowego;
+- READY — odczytano 0x0007, można wykonać test;
+- ALREADY_0003 — maska już poprawna, setter pominięty;
+- UNEXPECTED_BASELINE — inna maska, setter pominięty;
+- SET_SENT_UNVERIFIED / ACKED_UNVERIFIED — próba zapisu / ACK, jeszcze bez potwierdzenia;
+- SET_REJECTED — NAK setteru;
+- VERIFIED — odczyt potwierdza 0x0003 i zachowanie pozostałych bajtów;
+- VERIFY_FAILED — odczyt wykazał niezgodność.
 
-- **OK**: pasująca odpowiedź z poprawną sumą i akceptowaną długością.
-- **TIMEOUT**: brak pasującej odpowiedzi w dwóch próbach. Nie oznacza ustawienia
-  równego zero. Przyczyną może być odłączony TX, wyłączony protokół UBX,
-  inny baudrate lub nieobsługiwana wiadomość; samo milczenie ich nie rozróżnia.
-- **NAK**: odbiornik jawnie odrzucił zapytanie.
-- **MALFORMED**: zgodna suma, ale nieprawidłowa długość/struktura odpowiedzi.
-- **TRUNCATED**: odpowiedź większa niż 400 bajtów; raport zawiera pierwsze 400,
-  oryginalną długość i otrzymane bajty sumy, z oznaczeniem pominiętej części.
-  Nie należy traktować jej jako kompletnej ramki do ponownego wysłania.
-- **TX_ERROR**: HAL nie rozpoczął transmisji albo nie zakończył jej w 100 ms.
+## Zakres pełnego przeglądu publicznej konfiguracji
 
-Odpowiedzi o błędnej sumie są odrzucane; liczniki sum i UART pozostają w SESSION.
-Niepasujące odpowiedzi nie kończą bieżącego zapytania. ACK nie zastępuje odczytu.
-400 bajtów mieści pełne NAV-SVINFO z 32 kanałami (392 bajty); wyjątkowo długie
-rozszerzenia MON-VER mogą być oznaczone TRUNCATED. Dodatkowe pola zachowujemy
-w HEX, nawet jeżeli skrócone dekodowanie tekstowe ich nie wypisuje.
+Podstawa: **GPS.G6-SW-10018-F**, rozdział 31 i tabele wiadomości. Lista w
+`Core/Inc/gps_queries.inc` jest zamknięta — nie skanujemy nieznanych ID komend.
 
-CFG-ANT opisuje konfigurację obsługi anteny; bieżący stan diagnostyczny
-pochodzi z MON-HW i zależy od możliwości modułu. PPS nie jest włączany:
-CFG-TP tylko odczytuje to, co odbiornik ma ustawione.
+| Grupa | Odczyty |
+|---|---|
+| Nawigacja | CFG-NAV5, CFG-NAVX5, CFG-DAT, CFG-SBAS, CFG-NMEA |
+| Energia | CFG-RXM, CFG-FXN, CFG-PM, CFG-PM2 |
+| Antena / zakłócenia | CFG-ANT, próba pustego odczytu CFG-ITFM |
+| Czas | CFG-RATE, CFG-TP, CFG-TP5 dla wyjść 0 i 1, CFG-TMODE, CFG-TMODE2 |
+| Porty | CFG-PRT: DDC=0, UART1=1, UART2=2, USB=3, SPI=4; CFG-USB |
+| Informacje | CFG-INF dla UBX=0 i NMEA=1; CFG-RINV |
+| Wariant ADR | CFG-EKF, próba pustego odczytu CFG-ESFGWT |
+| Częstotliwości wiadomości | 55 zapytań CFG-MSG: wszystkie identyfikatory NMEA/PUBX i wyjściowe UBX z poniższej listy |
 
-## Współpraca z loggerem i pamięć
+CFG-MSG: NMEA GGA/GLL/GSA/GSV/RMC/VTG/GRS/GST/ZDA/GBS/DTM/THS/GPQ/TXT;
+PUBX 00/03/04/05/06/40/41; ESF-MEAS/STATUS; MON-HW2/HW/IO/MSGPP/RXBUF/RXR/TXBUF/VER;
+NAV-AOPSTATUS/CLOCK/DGPS/DOP/EKFSTATUS/POSECEF/POSLLH/SBAS/SOL/STATUS/SVINFO/TIMEGPS/TIMEUTC/VELECEF/VELNED;
+RXM-ALM/EPH/RAW/SFRB/SVSI; TIM-SVIN/TM2/TP/VRFY.
+INF ma własny CFG-INF. Część identyfikatorów wyjściowych jest wyłącznie odpytywana
+albo dostępna tylko w specjalnych wariantach odbiornika: CFG-MSG może zwrócić NAK.
+W odpowiedzi 8-bajtowej zachowujemy wszystkie stawki portów, nie tylko UART1.
 
-Parser przechowuje jedną odpowiedź i zamraża ją do udanego zamknięcia raportu.
-Bufor nadawania jest statyczny i pozostaje ważny do zakończenia transmisji IT.
-GPS_Process i przerwania nigdy nie wywołują FatFs. Raport zapisuje główna
-pętla poza wywołaniami zapisu pomiarów; podczas operacji SD UART jest nadal
-opróżniany. Zapis diagnostyki czeka, gdy surowy bufor IMU ma ponad 100 rekordów.
-Błędy otwarcia, zapisu lub zamknięcia raportu zachowują wynik i uruchamiają
-ponowną próbę zapisu po 2 s. Długi przestój karty nadal podlega ograniczeniom
-istniejących buforów IMU/SD, a ich liczniki strat pozostają aktywne.
+CFG-ITFM i CFG-ESFGWT nie mają osobno wyszczególnionej formy Poll Request
+w tej edycji dokumentacji. Wysyłamy jedynie pustą próbę odczytu, nigdy payload
+konfigurujący. Brak odpowiedzi jest raportowany, a nie zastępowany zerami.
 
-ARM Debug: statyczny RAM 17152 B, wolne 3328 B; rezerwacja stosu 2560 B,
-minimum sterty 512 B, dodatkowy margines 256 B. Bez zwiększania buforów IMU/SD.
-To budżet linkera; rzeczywiste maksimum stosu sprawdza stack_free_min_bytes.
-Poprzednia sesja miała tylko 92 B niewykorzystanej części rezerwacji stosu,
-więc raport używa małych fragmentów tekstu, nie dużego bufora na stosie.
+To **cały publiczny zakres konfiguracji opisany w tej edycji protokołu**, nie
+zrzut prywatnej pamięci odbiornika. Odpowiedzi NAK/TIMEOUT oznaczają lukę w
+odczycie, a nie potwierdzenie ustawień domyślnych. Nie odczytujemy nieudokumentowanych
+ustawień fabrycznych, kopii konfiguracji w każdym nośniku pamięci ani całej bazy
+efemeryd/almanachu (to dane nawigacyjne, nie ustawienia). Polecenia CFG-CFG,
+CFG-NVS i CFG-RST nie mają bezpiecznej funkcji odczytu stanu i nie są wysyłane.
 
-Testy hosta sprawdzają dozwolone ramki TX, brak resetów i setterów, brak
-odpowiedzi/NAK, nieprawidłowe długości i sumy, 32 kanały SVINFO, zamrożenie
-odpowiedzi podczas zapisu SD, błędy transmisji/zapisu i przepełnienie czasu ms.
-Wynik testów programowych nie potwierdza ustawień fizycznego odbiornika.
+## Obserwacja po zmianie
+
+Po przeglądzie konfiguracji wykonujemy **20 serii** NAV-STATUS, NAV-SVINFO, MON-HW.
+Między seriami jest co najmniej 30 sekund; timeouty i zapis SD wydłużają odstępy.
+Każdy wynik ma `t_ms` w skali MCU i `cycle=1..20`; `cycle=0` oznacza etap początkowy.
+To ponad 10 minut obserwacji po przeglądzie. Nie ma kolejnych zmian konfiguracji
+ani restartów podczas oczekiwania na pozycję. Po ostatniej serii nadawanie ustaje.
+
+## Interpretacja i wiarygodność zapisu
+
+BEGIN zawiera numer/łączną liczbę etapów, czas, nazwę, liczbę prób i status.
+`tx=` to ostatnia próbowana ramka nadania; przy TX_ERROR nie stanowi dowodu
+wysłania wszystkich bajtów. `raw=` to odpowiedź z prawidłową sumą kontrolną.
+Odpowiedzi zachowujemy w HEX, także dla pól bez skróconego dekodera tekstowego.
+`END` zamyka rekord. Niepełny zapis lub powtórzony numer po błędzie karty trzeba
+interpretować jako próbę; używaj późniejszego kompletnego rekordu.
+
+Statusy: OK, TIMEOUT, NAK, MALFORMED, TRUNCATED, TX_ERROR, SKIPPED,
+VERIFY_FAILED. SKIPPED dotyczy niewykonanego setteru; powód określa mask_change.
+Błędne sumy nie kończą zapytania i zwiększają licznik w SESSION.json.
+Odczyty mają maksymalnie dwie próby po 1,5 s. Setter najwyżej jedną próbę.
+
+Bufor odpowiedzi ma nadal 400 bajtów (pełne NAV-SVINFO dla 32 kanałów to 392).
+Odpowiedź większa jest jawnie TRUNCATED: oryginalna długość, pierwsze 400 bajtów,
+bajty otrzymanej sumy i oznaczenie ucięcia. Taka ramka nie jest kompletna do odtworzenia.
+Wszystkie stałe struktury CFG w tabeli mieszczą się w buforze; wyjątkowo długa
+odpowiedź MON-VER może nie zmieścić się w całości.
+
+Wynik i ramka TX są zamrożone do udanego zamknięcia raportu. GPS_Process nie
+wywołuje FatFs. Główna pętla zapisuje raport poza zapisem pomiarów, przy surowej
+kolejce IMU <=100 rekordów; przerwania/DMA i odbiór NMEA pracują dalej.
+Błąd SD zachowuje wynik i ponawia zapis po 2 s. Bez SD kolejne etapy czekają,
+więc również setter czeka, aż wcześniejsze wyniki znajdą się na karcie.
+
+ARM Debug: statyczny RAM 17200 B, wolne 3280 B; rezerwacja stosu 2560 B,
+minimum sterty 512 B, dodatkowy margines 208 B. Bufory IMU/SD nie zwiększyły się.
+Monitoruj stack_free_min_bytes i liczniki strat; budżet linkera nie zastępuje
+pomiaru stosu na sprzęcie. Testy sprawdzają dokładne bajty jedynego setteru,
+pełne porównanie odczytu, utratę ACK, NAK, niezgodny stan początkowy, błędy UART/SD,
+niezmienność bufora podczas zapisu, zakres CFG, odstępy 20 serii i koniec nadawania.

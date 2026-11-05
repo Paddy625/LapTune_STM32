@@ -193,7 +193,7 @@ int main(void)
     Error_Handler();
   }
   if (GPS_Init(&huart3) != HAL_OK) Error_Handler();
-  /* GPS query firmware never restores or resets receiver configuration. */
+  /* GPS performs one volatile UART output-mask test; no restore or reset. */
   app_ready=1; /* GPS RX/configuration can be serviced during initial SD setup. */
   SD_SPI_Bind(&hspi1);
   SDLogger_Start(); /* Prepare and sync the file before arming acquisition. */
@@ -372,7 +372,7 @@ static void MX_USART2_UART_Init(void)
 }
 
 /**
-  * @brief USART3: 9600 baud; read-only GPS queries, no baud/rate changes.
+  * @brief USART3: 9600 baud; configuration snapshot and output-mask test, no baud/rate changes.
   */
 static void MX_USART3_UART_Init(void)
 {

@@ -25,24 +25,30 @@ typedef struct {
 
 HAL_StatusTypeDef GPS_Init(UART_HandleTypeDef *uart);
 typedef enum { GPS_QUERY_OK, GPS_QUERY_TIMEOUT, GPS_QUERY_NAK,
-    GPS_QUERY_MALFORMED, GPS_QUERY_TRUNCATED, GPS_QUERY_TX_ERROR } GPS_QueryStatus;
+    GPS_QUERY_MALFORMED, GPS_QUERY_TRUNCATED, GPS_QUERY_TX_ERROR, GPS_QUERY_SKIPPED, GPS_QUERY_VERIFY_FAILED } GPS_QueryStatus;
+typedef enum { GPS_MASK_NO_BASELINE, GPS_MASK_READY, GPS_MASK_ALREADY, GPS_MASK_UNEXPECTED,
+    GPS_MASK_SENT, GPS_MASK_ACKED, GPS_MASK_REJECTED, GPS_MASK_VERIFIED, GPS_MASK_VERIFY_FAILED } GPS_MaskState;
 typedef struct {
     const char *name;
     const uint8_t *payload; /* Immutable until GPS_QuerySaved; never owned by DMA. */
     uint32_t t_ms;
-    uint16_t length,stored;
-    uint8_t index,total,attempts,query_class,query_id,rx_class,rx_id,ck_a,ck_b;
+    const uint8_t *tx_frame;
+    uint16_t length,stored,index,total;
+    uint8_t attempts,query_class,query_id,rx_class,rx_id,ck_a,ck_b;
+    uint8_t tx_length,rx_present,cycle;
+    GPS_MaskState mask_state;
     GPS_QueryStatus status;
 } GPS_QueryResult;
 const GPS_QueryResult *GPS_QueryPending(void);
 void GPS_QuerySaved(void); /* Only after successful report close/sync. */
 unsigned GPS_QueryProgress(void);
 unsigned GPS_QueryCount(void);
+unsigned GPS_ConfigQueryCount(void);
 void GPS_OnRxComplete(UART_HandleTypeDef *uart);
 void GPS_OnTxComplete(UART_HandleTypeDef *uart);
 void GPS_DiagnosticsSnapshot(GPS_Diagnostics *out);
 void GPS_OnError(UART_HandleTypeDef *uart);
-/* Main loop: legacy GGA/RMC receive path. Read-only polls; no GPS configuration writes. */
+/* Main loop: legacy GGA/RMC receive path. Full public configuration polls and one verified UART1 mask edit. */
 void GPS_Process(uint32_t now);
 const GPS_Data *GPS_GetData(void);
 /* State stays PASSIVE: legacy restore fields are unused; query results are separate. */

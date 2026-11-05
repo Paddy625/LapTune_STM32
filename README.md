@@ -1,20 +1,19 @@
 # LapTune_STM32
 
-Firmware loggera STM32. **2.1.7: odczyt konfiguracji GPS do `GPS_CFG.TXT`**, bez zmiany ustawień ani resetowania odbiornika ([instrukcja](docs/GPS_CONFIG_QUERY.md)). Odbiór GGA/RMC nadal korzysta z parsera `1fd016f` przy 9600 baud. IMU i zapis SD pozostają aktywne.
-PPS jest wyłączony; przewód PA0 może pozostać podłączony. Skorygowano licznik diagnostyczny, aby nie uznawał flag porównania TIM2 za impulsy PPS.
-**P0: [format danych i DRDY](docs/P0_LOGGER.md)**; opisy konfiguracji UBX/PPS w starszych dokumentach dotyczą poprzednich wersji.
-Wymagane przewody IMU: **INT1 → PA1 (A1), INT2 → PA4 (A2)**.
+Firmware loggera STM32. **2.1.8: test maski UART1 `0x0007 → 0x0003` oraz pełny przegląd publicznej konfiguracji GPS** ([instrukcja i zakres](docs/GPS_CONFIG_QUERY.md)).
+Zmiana jest jednorazowa na start MCU, oparta na odczycie portu, potwierdzana ponownym odczytem wszystkich 20 bajtów. Nie ma resetu GPS ani zapisu do pamięci nieulotnej. IMU, GGA/RMC i SD pracują dalej.
+PPS jest wyłączony po stronie STM32; ustawień wyjścia GPS nie zmieniamy.
+**P0: [format danych i DRDY](docs/P0_LOGGER.md)**. Wymagane przewody IMU: **INT1 → PA1 (A1), INT2 → PA4 (A2)**.
 
 IMU **KAmodLSM6DS3** (zastępuje LIS3DH): [połączenia, akcelerometr i żyroskop](docs/IMU_LSM6DS3.md).
 
 Obsługa wyświetlacza **ST7735S 160×128**: [schemat połączeń, kod i uruchomienie](docs/TFT_ST7735S.md).
 
 GPS **u-blox NEO-6M / GY-NEO6MV2**: [połączenia UART, pozycja, wysokość MSL i data/czas UTC](docs/GPS_NEO6M.md).
-GPS odbiera dane przy **9600 baud**. Przy każdym starcie wykonuje jedną serię 21 zapytań odczytu: wersja, UART, częstotliwość, nawigacja, PPS, antena, częstotliwości wiadomości i stan odbioru.
-**PB10 (TX Nucleo) → RX GPS musi być podłączony**, żeby zapytania dotarły do modułu. TX GPS pozostaje połączony z PB11. Program nie zawiera nadawania CFG-CFG, CFG-RST ani setterów konfiguracji.
-Po około 2 minutach z kartą SD naciśnij B1, zaczekaj na SD SAVED i prześlij **GPS_CFG.TXT oraz SESSION.json** z tej samej sesji. Nie trzeba czekać na fix.
-Aktualizację pobierz z `main`, wykonaj Clean/Build i wgraj w CubeIDE.
-Nagłówek TFT pokazuje **LAPTUNE 2.1.7**.
+GPS odbiera dane przy **9600 baud**. Raport `GPS_CFG.TXT` obejmuje 90 etapów odczytu/testu konfiguracji i 20 serii NAV-STATUS/NAV-SVINFO/MON-HW rozdzielonych co najmniej 30 s.
+**PB10 (TX Nucleo) → RX GPS** oraz **TX GPS → PB11** muszą pozostać podłączone.
+Uruchom na zewnątrz na około **15–20 minut** z kartą SD, naciśnij B1, zaczekaj na SD SAVED i prześlij **GPS_CFG.TXT oraz SESSION.json**. Pełny raport kończy się `COMPLETE`; `CONFIG_READ_COMPLETE` oznacza koniec samego przeglądu konfiguracji.
+Pobierz `main`, wykonaj Clean/Build i wgraj w CubeIDE. Nagłówek TFT: **LAPTUNE 2.1.8**.
 [Archiwum HEX 2.1.1](firmware/README.md) dotyczy poprzedniej wersji, nie aktualnego kodu.
 
 Logger **microSD na SPI1 wspólnym z TFT**: [połączenia i format TXT](docs/SD_LOGGING.md).
