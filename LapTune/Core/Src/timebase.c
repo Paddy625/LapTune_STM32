@@ -71,7 +71,8 @@ void Timebase_OnOverflow(void)
 {
 #ifndef LAPTUNE_HOST_TEST
     uint32_t flags=TIM2->SR;
-    if (flags&TIM_SR_CC1IF) {
+    if ((TIM2->DIER&TIM_DIER_CC1IE) && (TIM2->CCER&TIM_CCER_CC1E) &&
+        (TIM2->CCMR1&TIM_CCMR1_CC1S) && (flags&TIM_SR_CC1IF)) {
         uint16_t c=(uint16_t)TIM2->CCR1,n=(uint16_t)TIM2->CNT;
         capture(c,n,!!(flags&TIM_SR_UIF),!!(flags&TIM_SR_CC1OF));
     }

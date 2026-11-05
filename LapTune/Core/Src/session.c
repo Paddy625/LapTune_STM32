@@ -58,7 +58,7 @@ FRESULT Session_Write(const char *dir)
     WRITE("  \"firmware_dirty\": %s,\n",FIRMWARE_DIRTY ? "true" : "false");
     STR("firmware_version",LAPTUNE_FIRMWARE_VERSION); STR("firmware_commit",FIRMWARE_COMMIT);
     STR("boot_id",dir); STR("mcu","STM32F103RB"); STR("imu","LSM6DS3");
-    STR("gps_model","NEO-6 declared; identification via MON-VER fields");
+    STR("gps_model","NEO-6 declared; MON-VER raw identification in GPS_CFG.TXT");
     STR("gps_software",GPS_SoftwareVersion()); STR("gps_hardware",GPS_HardwareVersion());
     STR("time_source","TIM2 16-bit + overflow extension, nominal 1 MHz HSI PLL");
     STR("imu_timestamp","later ACC/GYRO DRDY IRQ; no bus/read/write timestamp reconstruction");
@@ -66,6 +66,7 @@ FRESULT Session_Write(const char *dir)
     STR("utc","Approximate UTC extrapolated from RMC reception, as in 1fd016f; no PPS synchronization");
     STR("axis_frame","sensor PCB XYZ; no vehicle rotation, gravity removal or startup zeroing");
     STR("invalid_imu","six empty vector fields; IMU_FLAGS: SPI=1,FRESH=2,PAIR=4,CLIP=8,TIMEOUT=16");
+    STR("gps_configuration_report","GPS_CFG.TXT: per-query status, raw UBX and decoded fields; separate from measurement files");
     STR("gps_profile","1fd016f: default 1Hz/9600/NMEA; no UBX NAV or PPS configuration");
     STR("gps_epoch_identity","local sequence for matched NMEA UTC-of-day; GPS_ITOW_MS and GPS_T_MEAS_US empty, TIME_SYNC_STATE=0");
     STR("gps_states","N=new valid epoch once, R=immutable repetition, I=no valid position");
@@ -86,7 +87,7 @@ FRESULT Session_Write(const char *dir)
     if (r==FR_OK) r=number64(&f,"gps_nmea_last_fix_us",gps.nmea_last_fix_us);
     WRITE("  \"gps_recovery_attempts\": %lu,\n",(unsigned long)gps.recovery_attempts);
     if (r==FR_OK) r=number64(&f,"gps_recovery_us",gps.recovery_us);
-    STR("gps_recovery_reason","2.1.6 factory rollback once; passive NMEA afterwards; NO FIX never triggers a reset");
+    STR("gps_recovery_reason","2.1.7 read-only queries; no restore/reset/set/save commands");
     WRITE("  \"gps_restore_state\": %u, \"gps_restore_error\": %u, \"gps_restore_ack\": %u,\n",c->restore_state,c->restore_error,c->restore_ack);
     STR("gps_restore_states","0=not requested this boot,1=pending,2=defaults TX,3=cold TX,4=factory 9600/1Hz/NMEA read back,5=failed; 4 is not RF/fix verification");
     WRITE("  \"gps_min_period_ms\": %lu, \"gps_max_period_ms\": %lu, \"gps_history_misses\": %lu,\n",(unsigned long)gps.min_period_ms,(unsigned long)gps.max_period_ms,(unsigned long)gps.history_misses);
@@ -144,7 +145,7 @@ FRESULT Session_Write(const char *dir)
         WRITE("  \"gps_uart_%s_%s\": %lu,\n",phases[phase],errors[error],(unsigned long)gps.uart_by_phase[phase][error]);
     WRITE("  \"gps_checksum_init\": %lu, \"gps_checksum_run\": %lu, \"gps_tx_errors\": %lu,\n",(unsigned long)gps.checksum_by_phase[0],(unsigned long)gps.checksum_by_phase[1],(unsigned long)gps.tx_errors);
     WRITE("  \"gps_received_epochs\": %lu, \"gps_published_epochs\": %lu, \"gps_valid_epochs\": %lu, \"gps_invalid_fixes\": %lu,\n",(unsigned long)gps.received_epochs,(unsigned long)gps.epoch_count,(unsigned long)gps.valid_epochs,(unsigned long)gps.invalid_fixes);
-    STR("gps_configuration_states","0=factory restore pending,1=defaults readback OK,2=restore error,3=passive NMEA without readback this boot; no state implies fix");
+    STR("gps_configuration_states","3=NMEA plus read-only queries; legacy states 0/1/2 unused; query statuses are in GPS_CFG.TXT");
 #undef U64
     WRITE("  \"antenna_imu_lever_arm_m\": null, \"mounting_calibration\": \"desktop application\"\n}\n");
     if (r==FR_OK) r=f_sync(&f);

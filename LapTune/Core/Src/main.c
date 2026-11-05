@@ -29,6 +29,7 @@
 #include "imu_stream.h"
 #include "acc_display.h"
 #include "gps.h"
+#include "gps_report.h"
 #include "gps_display.h"
 #include "sd_spi.h"
 #include "sd_logger.h"
@@ -192,7 +193,7 @@ int main(void)
     Error_Handler();
   }
   if (GPS_Init(&huart3) != HAL_OK) Error_Handler();
-  if (BootIdentity_TakeGPSRestore()) GPS_RequestRestore();
+  /* GPS query firmware never restores or resets receiver configuration. */
   app_ready=1; /* GPS RX/configuration can be serviced during initial SD setup. */
   SD_SPI_Bind(&hspi1);
   SDLogger_Start(); /* Prepare and sync the file before arming acquisition. */
@@ -219,6 +220,7 @@ int main(void)
       last_sensor_retry=HAL_GetTick();
     }
     SDLogger_Process(HAL_GetTick());
+    GPSReport_Process(HAL_GetTick());
     const IMU_DisplayData readings = {
       .accel = {ax, ay, az},
       .accel_min = {min_x, min_y, min_z},
@@ -370,7 +372,7 @@ static void MX_USART2_UART_Init(void)
 }
 
 /**
-  * @brief USART3: bootstrap at 9600 baud; GPS driver discovers/configures 38400 baud, 5 Hz.
+  * @brief USART3: 9600 baud; read-only GPS queries, no baud/rate changes.
   */
 static void MX_USART3_UART_Init(void)
 {

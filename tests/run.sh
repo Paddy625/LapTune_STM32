@@ -17,6 +17,9 @@ cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -DLAPTUNE_HOST
    LapTune/Core/Src/gps_nmea.c LapTune/Core/Src/gps_epoch.c LapTune/Core/Src/gps_time.c LapTune/Core/Src/log_clock.c tests/stubs/pps_source.c -o "$test_build/gps_config"
 "$test_build/gps_config"
 cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -DLAPTUNE_HOST_TEST \
+   -Itests/stubs -ILapTune/Core/Inc -ILapTune/Core/FatFs tests/test_gps_report.c LapTune/Core/Src/gps_report.c -o "$test_build/gps_report"
+"$test_build/gps_report"
+cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -DLAPTUNE_HOST_TEST \
    -Itests/stubs -ILapTune/Core/Inc tests/test_log_clock.c LapTune/Core/Src/log_clock.c LapTune/Core/Src/gps_time.c tests/stubs/pps_source.c -o "$test_build/log_clock"
 "$test_build/log_clock"
 cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -DLAPTUNE_HOST_TEST \

@@ -1,3 +1,5 @@
+> **2.1.7:** aktualna wersja tylko odczytuje ustawienia do [GPS_CFG.TXT](GPS_CONFIG_QUERY.md). Nie uruchamia procedury przywracania ani resetu opisanej w historii poniżej.
+
 # Powrót GPS do profilu sprzed 5 Hz — 2.1.6
 
 Normalna obsługa GPS ponownie odbiera GGA/RMC przy 9600 baud, jak w `1fd016f`.

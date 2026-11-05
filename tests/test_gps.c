@@ -11,7 +11,7 @@ HAL_StatusTypeDef HAL_UART_Receive_IT(UART_HandleTypeDef *u,uint8_t *p,uint16_t 
 HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef *u) { assert(u==&uart); return HAL_OK; }
 HAL_StatusTypeDef HAL_UART_Init(UART_HandleTypeDef *u) { assert(u==&uart && u->Init.BaudRate==9600); return HAL_OK; }
 HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *u,const uint8_t *p,uint16_t n)
-{ (void)u; (void)p; (void)n; assert(!"Passive GPS must never transmit"); return HAL_ERROR; }
+{ assert(u==&uart && n==8 && p[2]==10 && p[3]==4 && !p[4]); GPS_OnTxComplete(u); return HAL_OK; }
 HAL_StatusTypeDef HAL_UART_AbortTransmit(UART_HandleTypeDef *u) { assert(u==&uart); return HAL_OK; }
 static void feed(uint8_t ch) { *rx=ch; GPS_OnRxComplete(&uart); }
 static void sentence(const char *body,int corrupt)
@@ -64,5 +64,5 @@ int main(void)
     assert(gps_diag.rx_overflows==1 && !GPS_GetData()->position_valid);
     fail_rearm=1; feed('x'); process(); fail_rearm=0; process();
     now+=1000000; pair("123528"); process(); assert(GPS_GetData()->position_valid);
-    puts("PASS legacy GPS: NMEA fix, IRQ reception time, immutable paired epochs, partial/invalid epochs, UTC, checksum rejection, overflow and UART recovery; no TX");
+    puts("PASS legacy GPS: NMEA fix, IRQ reception time, immutable paired epochs, partial/invalid epochs, UTC, checksum rejection, overflow and UART recovery; only read-only version polls");
 }

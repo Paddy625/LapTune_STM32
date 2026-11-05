@@ -24,16 +24,28 @@ typedef struct {
 } GPS_ConfigStatus;
 
 HAL_StatusTypeDef GPS_Init(UART_HandleTypeDef *uart);
-/* Call once immediately after Init, only with a persistent reservation. */
-void GPS_RequestRestore(void);
+typedef enum { GPS_QUERY_OK, GPS_QUERY_TIMEOUT, GPS_QUERY_NAK,
+    GPS_QUERY_MALFORMED, GPS_QUERY_TRUNCATED, GPS_QUERY_TX_ERROR } GPS_QueryStatus;
+typedef struct {
+    const char *name;
+    const uint8_t *payload; /* Immutable until GPS_QuerySaved; never owned by DMA. */
+    uint32_t t_ms;
+    uint16_t length,stored;
+    uint8_t index,total,attempts,query_class,query_id,rx_class,rx_id,ck_a,ck_b;
+    GPS_QueryStatus status;
+} GPS_QueryResult;
+const GPS_QueryResult *GPS_QueryPending(void);
+void GPS_QuerySaved(void); /* Only after successful report close/sync. */
+unsigned GPS_QueryProgress(void);
+unsigned GPS_QueryCount(void);
 void GPS_OnRxComplete(UART_HandleTypeDef *uart);
 void GPS_OnTxComplete(UART_HandleTypeDef *uart);
 void GPS_DiagnosticsSnapshot(GPS_Diagnostics *out);
 void GPS_OnError(UART_HandleTypeDef *uart);
-/* Main loop: legacy GGA/RMC receive path. No runtime GPS configuration. */
+/* Main loop: legacy GGA/RMC receive path. Read-only polls; no GPS configuration writes. */
 void GPS_Process(uint32_t now);
 const GPS_Data *GPS_GetData(void);
-/* READY = defaults read back this boot; PASSIVE = receive only, no readback. */
+/* State stays PASSIVE: legacy restore fields are unused; query results are separate. */
 const GPS_ConfigStatus *GPS_GetConfig(void);
 const char *GPS_SoftwareVersion(void);
 const char *GPS_HardwareVersion(void);
