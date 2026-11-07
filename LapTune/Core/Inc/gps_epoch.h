@@ -23,6 +23,16 @@ typedef struct {
     uint8_t dynamic_model,fix_mode,power_mode,seen;
     int8_t min_elevation;
 } GPS_ReceiverStatus;
+/* Session-wide NAV-TIMEUTC history; stream resets must not erase it. */
+enum { GPS_UTC_REJECT_NONE, GPS_UTC_REJECT_FLAGS, GPS_UTC_REJECT_CALENDAR,
+       GPS_UTC_REJECT_NANO, GPS_UTC_REJECT_LENGTH };
+typedef struct {
+    uint64_t first_rx_us,last_rx_us,first_valid_us,last_rejected_us;
+    uint32_t packets,accepted,rejected_flags,rejected_calendar,rejected_nano,rejected_length;
+    uint32_t flags_histogram[8]; /* Low three validity bits, only 20-byte payloads. */
+    uint16_t last_rejected_length;
+    uint8_t last_rejected_reason,last_rejected_payload[20];
+} GPS_UTCDiagnostics;
 typedef struct {
     uint32_t checksum_errors,uart_errors,rx_overflows,incomplete,late,invalid_fixes,epoch_count,bad_period,history_misses;
     uint32_t min_period_ms,max_period_ms,received_epochs,valid_epochs;
@@ -33,6 +43,7 @@ typedef struct {
     uint32_t nmea_sentences,nmea_fix_sentences,recovery_attempts;
     uint64_t nmea_last_us,nmea_last_fix_us,recovery_us;
     GPS_ReceiverStatus receiver;
+    GPS_UTCDiagnostics utc;
 } GPS_Diagnostics;
 extern GPS_Diagnostics gps_diag;
 void GPS_Epoch_Init(void);

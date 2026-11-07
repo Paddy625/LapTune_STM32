@@ -10,8 +10,49 @@ static void epoch(uint32_t itow,uint64_t t,unsigned parts,unsigned type)
     if (parts&2) GPS_Epoch_Packet(&data,1,0x12,v,36,t+1000);
     if (parts&4) GPS_Epoch_Packet(&data,1,6,s,52,t+2000);
 }
+static void test_utc_diagnostics(void)
+{
+    GPS_Epoch_Init(); memset(&data,0,sizeof(data));
+    uint8_t p[21]={0}; p[12]=0xEA; p[13]=7; p[14]=3; p[15]=1;
+    GPS_UTCDiagnostics *u=&gps_diag.utc;
+    for (unsigned flags=0;flags<8;++flags) {
+        p[19]=(uint8_t)flags; GPS_Epoch_Packet(&data,1,0x21,p,20,5000000000ULL+flags);
+        assert(data.datetime_valid==(flags==7));
+        assert(u->flags_histogram[flags]==1);
+    }
+    assert(u->packets==8 && u->accepted==1 && u->rejected_flags==7);
+    assert(u->first_rx_us==5000000000ULL && u->first_valid_us==5000000007ULL);
+    assert(u->last_rejected_payload[19]==6 && u->last_rejected_reason==GPS_UTC_REJECT_FLAGS);
+    p[14]=2; p[15]=29; GPS_Epoch_Packet(&data,1,0x21,p,20,5000000008ULL);
+    assert(!data.datetime_valid && u->rejected_calendar==1);
+    p[15]=28;
+    put32(p+8,1000000000U); GPS_Epoch_Packet(&data,1,0x21,p,20,5000000009ULL);
+    put32(p+8,(uint32_t)-1000000000); GPS_Epoch_Packet(&data,1,0x21,p,20,5000000010ULL);
+    assert(!data.datetime_valid && u->rejected_nano==2);
+    /* First failing check wins; a bad date does not also count bad nano. */
+    p[14]=0; GPS_Epoch_Packet(&data,1,0x21,p,20,5000000011ULL);
+    assert(u->rejected_calendar==2 && u->rejected_nano==2);
+    p[14]=3; p[15]=1; put32(p+8,(uint32_t)-1);
+    GPS_Epoch_Packet(&data,1,0x21,p,20,5000000012ULL);
+    assert(data.datetime_valid && data.month==2 && data.day==28 && data.millisecond==999);
+    assert(u->accepted==2 && u->first_valid_us==5000000007ULL);
+    GPS_Epoch_Packet(&data,1,0x21,p,19,5000000013ULL);
+    GPS_Epoch_Packet(&data,1,0x21,p,21,5000000014ULL);
+    GPS_Epoch_Packet(&data,1,0x21,NULL,0,5000000015ULL);
+    assert(data.datetime_valid && u->rejected_length==3);
+    assert(u->last_rejected_length==0 && u->last_rejected_reason==GPS_UTC_REJECT_LENGTH);
+    assert(u->packets==u->accepted+u->rejected_flags+u->rejected_calendar+u->rejected_nano+u->rejected_length);
+    GPS_UTCDiagnostics saved=*u;
+    GPS_Epoch_ResetStream(&data,5000000016ULL); GPS_Epoch_Service(&data,5000000020ULL);
+    assert(!memcmp(u,&saved,sizeof(saved))); /* Recovery retains history. */
+    GPS_Epoch_Init(); p[19]=7; put32(p+8,0);
+    GPS_Epoch_Packet(&data,1,0x21,p,20,0);
+    GPS_Epoch_Packet(&data,1,0x21,p,20,1);
+    assert(u->first_rx_us==0 && u->first_valid_us==0 && u->last_rx_us==1 && u->accepted==2);
+}
 int main(void)
 {
+    test_utc_diagnostics();
     GPS_Fix a,b; GPS_Epoch_Init(); GPS_Epoch_ForSample(10,&a); assert(!a.position_valid);
     epoch(1000,100000,7,3); GPS_Epoch_ForSample(102000,&a);
     assert(a.position_valid && a.fix_id==1 && a.itow_ms==1000 && a.latitude_e7==521234567);

@@ -114,6 +114,19 @@ FRESULT Session_Write(const char *dir)
     WRITE("  \"gps_incomplete_epochs\": %lu, \"gps_late_fragments\": %lu, \"gps_bad_periods\": %lu,\n",(unsigned long)gps->incomplete,(unsigned long)gps->late,(unsigned long)gps->bad_period);
     WRITE("  \"sd_queue_dropped\": %lu, \"sd_written\": %lu, \"sd_max_pause_us\": %lu,\n",(unsigned long)sd_log_dropped,(unsigned long)sd_log_written,(unsigned long)sd_max_pause_us);
 #define U64(k,v) do { if (r==FR_OK) r=number64(&f,k,v); } while (0)
+    const GPS_UTCDiagnostics *utc=&gps->utc;
+    U64("gps_timeutc_first_rx_us",utc->first_rx_us); U64("gps_timeutc_last_rx_us",utc->last_rx_us);
+    U64("gps_timeutc_first_valid_us",utc->first_valid_us); U64("gps_timeutc_last_rejected_us",utc->last_rejected_us);
+    WRITE("  \"gps_timeutc_packets\": %lu, \"gps_timeutc_accepted\": %lu,\n",(unsigned long)utc->packets,(unsigned long)utc->accepted);
+    WRITE("  \"gps_timeutc_rejected_flags\": %lu, \"gps_timeutc_rejected_calendar\": %lu,\n",(unsigned long)utc->rejected_flags,(unsigned long)utc->rejected_calendar);
+    WRITE("  \"gps_timeutc_rejected_nano\": %lu, \"gps_timeutc_rejected_length\": %lu,\n",(unsigned long)utc->rejected_nano,(unsigned long)utc->rejected_length);
+    WRITE("  \"gps_timeutc_flags_histogram\": [");
+    for (unsigned i=0;i<8;++i) WRITE("%s%lu",i ? "," : "",(unsigned long)utc->flags_histogram[i]);
+    WRITE("],\n  \"gps_timeutc_last_rejected_reason\": %u, \"gps_timeutc_last_rejected_length\": %u,\n",utc->last_rejected_reason,utc->last_rejected_length);
+    WRITE("  \"gps_timeutc_last_rejected_payload\": [");
+    for (unsigned i=0;i<20 && i<utc->last_rejected_length;++i) WRITE("%s%u",i ? "," : "",utc->last_rejected_payload[i]);
+    WRITE("],\n");
+    STR("gps_timeutc_diagnostics","checksum-valid UBX 01/21; counts per packet; flags histogram index=validity bits 0..7; reject 0=none,1=flags,2=calendar,3=nano,4=length; payload first 20 bytes, decimal");
     U64("gps_svinfo_rx_us",rx->sky_rx_us); U64("gps_mon_hw_rx_us",rx->hw_rx_us);
     U64("snapshot_t_us",snapshot); U64("sd_ready_us",sd->sd_ready_us); U64("imu_start_us",imu->start_us);
     U64("first_written_us",sd->first_written_us); U64("first_written_sample_us",sd->first_written_sample_us);

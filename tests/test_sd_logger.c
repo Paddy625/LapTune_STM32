@@ -122,6 +122,9 @@ static void nav(uint32_t itow,uint64_t us,unsigned parts,unsigned type)
 static void test_contract(void)
 {
     fresh_card(0); SDLogger_Start(); assert(sd_log_state==LOG_RECORDING);
+    uint8_t utc_packet[20]={0}; utc_packet[12]=0xEA; utc_packet[13]=7; utc_packet[14]=11; utc_packet[15]=7;
+    utc_packet[19]=3; GPS_Epoch_Packet(&gps_data,1,0x21,utc_packet,20,100);
+    utc_packet[19]=7; GPS_Epoch_Packet(&gps_data,1,0x21,utc_packet,20,5000000000ULL);
     append(1); SDLogger_Process(tick);
     uint64_t t=7200000001ULL; nav(1000,t,7,3);
     LogTime utc={.year=2026,.month=11,.day=1,.hour=12,.minute=13,.second=14,.millisecond=123,.valid=1};

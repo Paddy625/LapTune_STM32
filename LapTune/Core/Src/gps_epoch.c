@@ -178,13 +178,42 @@ static uint8_t days(uint16_t y,uint8_t m)
     static const uint8_t table[]={31,28,31,30,31,30,31,31,30,31,30,31};
     return table[m-1]+(m==2 && y%4==0 && (y%100!=0 || y%400==0));
 }
-static void utc(GPS_Data *d,const uint8_t *p,uint64_t now)
+static void utc_rejected(const uint8_t *p,unsigned len,uint64_t now,uint8_t reason)
 {
+    GPS_UTCDiagnostics *u=&gps_diag.utc;
+    u->last_rejected_us=now; u->last_rejected_reason=reason;
+    u->last_rejected_length=(uint16_t)len;
+    memset(u->last_rejected_payload,0,sizeof(u->last_rejected_payload));
+    unsigned stored=len<sizeof(u->last_rejected_payload) ? len : sizeof(u->last_rejected_payload);
+    if (stored) memcpy(u->last_rejected_payload,p,stored);
+}
+static void utc(GPS_Data *d,const uint8_t *p,unsigned len,uint64_t now)
+{
+    GPS_UTCDiagnostics *u=&gps_diag.utc;
+    if (!u->packets) u->first_rx_us=now;
+    ++u->packets; u->last_rx_us=now;
+    if (len!=20) {
+        ++u->rejected_length; utc_rejected(p,len,now,GPS_UTC_REJECT_LENGTH);
+        return; /* Preserve the existing behavior: malformed lengths do not update UTC. */
+    }
+    ++u->flags_histogram[p[19]&7U];
     gps_diag.receiver.utc_flags=p[19]; gps_diag.receiver.seen|=GPS_RX_UTC;
     uint16_t year=(uint16_t)p[12]|((uint16_t)p[13]<<8);
-    if ((p[19]&7)!=7 || year<1980 || year>2099 || !p[14] || p[14]>12 || !p[15] ||
-        p[15]>days(year,p[14]) || p[16]>23 || p[17]>59 || p[18]>59) { d->datetime_valid=0; return; }
-    int32_t nano=i32(p+8); if (nano<=-1000000000 || nano>=1000000000) { d->datetime_valid=0; return; }
+    if ((p[19]&7)!=7) {
+        ++u->rejected_flags; utc_rejected(p,len,now,GPS_UTC_REJECT_FLAGS);
+        d->datetime_valid=0; return;
+    }
+    if (year<1980 || year>2099 || !p[14] || p[14]>12 || !p[15] ||
+        p[15]>days(year,p[14]) || p[16]>23 || p[17]>59 || p[18]>59) {
+        ++u->rejected_calendar; utc_rejected(p,len,now,GPS_UTC_REJECT_CALENDAR);
+        d->datetime_valid=0; return;
+    }
+    int32_t nano=i32(p+8); if (nano<=-1000000000 || nano>=1000000000) {
+        ++u->rejected_nano; utc_rejected(p,len,now,GPS_UTC_REJECT_NANO);
+        d->datetime_valid=0; return;
+    }
+    if (!u->accepted) u->first_valid_us=now;
+    ++u->accepted;
     int32_t ms=nano<0 ? -(int32_t)((-(int64_t)nano+999999)/1000000) : nano/1000000;
     int32_t day_ms=((int32_t)p[16]*3600+p[17]*60+p[18])*1000+ms;
     d->year=year; d->month=p[14]; d->day=p[15];
@@ -197,7 +226,11 @@ static void utc(GPS_Data *d,const uint8_t *p,uint64_t now)
 void GPS_Epoch_Packet(GPS_Data *d,uint8_t cls,uint8_t id,const uint8_t *p,unsigned len,uint64_t now)
 {
     if (cls!=1) return;
-    if (id==0x21 && len==20) { utc(d,p,now); d->sentence_ms=(uint32_t)(now/1000U); d->connected=1; return; }
+    if (id==0x21) {
+        utc(d,p,len,now);
+        if (len==20) { d->sentence_ms=(uint32_t)(now/1000U); d->connected=1; }
+        return;
+    }
     uint8_t part=(id==2 && len==28)?1:((id==0x12 && len==36)?2:((id==6 && len==52)?4:0));
     if (!part) return;
     if (part==4) {

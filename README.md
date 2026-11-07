@@ -1,11 +1,13 @@
 # LapTune_STM32
 
-Firmware loggera STM32, **2.2.1: priorytet zapisu IMU/GPS, mniejsze zużycie stosu**.
+Firmware loggera STM32, **2.2.2: diagnostyka opóźnionego UTC z GPS**.
 IMU zapisuje rzeczywiste próbki DRDY przy natywnych 104 Hz. UTC próbek jest
 wyznaczane z PPS + TIM-TP + NAV-TIMEUTC, a czas pomiaru GPS jest oddzielony
 od czasu odbioru UART. [Zasady czasu i uruchomienie](docs/GPS_PPS.md).
 Przyczyna problemu NO FIX została ustalona na sprzęcie: przewody INT1/INT2
 prowadzone blisko toru antenowego. Zachowaj poprawione prowadzenie przewodów.
+
+[Diagnostyka UTC w 2.2.2](docs/GPS_UTC_DIAGNOSTICS.md): moment pierwszej ramki i poprawnego UTC, flagi oraz powody odrzucenia w `SESSION.json`.
 
 [Zmiany 2.2.1 i diagnostyka po wgraniu](docs/LOGGER_2_2_1.md). TFT służy do diagnostyki i może odświeżać się z opóźnieniem.
 
@@ -24,7 +26,7 @@ resetowania GPS, przywracania fabrycznego ani zapisu ustawień GPS na stałe.
 Eksperymentalny raport `GPS_CFG.TXT` nie jest już generowany przy starcie.
 
 Pobierz `main`, wykonaj **Clean/Build** i wgraj w CubeIDE. TFT pokaże
-**LAPTUNE 2.2.1**. Po uzyskaniu sygnału sprawdź w `SESSION.json`:
+**LAPTUNE 2.2.2**. Po uzyskaniu sygnału sprawdź w `SESSION.json`:
 `gps_configuration_state=1`, `gps_measurement_ms=200`, `pps_configuration_state=1`,
 rosnące `pps_pulses` i `pps_matched`, a następnie `time_sync_state=1`.
 W TXT po synchronizacji pojawią się `GPS_T_MEAS_US` i UTC z milisekundami.

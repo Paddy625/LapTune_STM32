@@ -68,5 +68,14 @@ int main(void)
     assert(gps_diag.receiver.antenna_status==4 && gps_diag.receiver.jamming==9 && gps_diag.receiver.agc_count==0x1234);
     frame_class(0x0A,9,hw,60,0); GPS_Process(1300); assert(gps_diag.receiver.jamming==200);
     assert(!copy.receiver.antenna_status && copy.receiver.cno_max==55 && GPS_GetData()->position_valid);
+    /* Corrupt UART frames never reach the UTC diagnostic counters. */
+    assert(GPS_Init(&uart)==HAL_OK);
+    uint8_t utc[20]={0}; utc[12]=0xEA; utc[13]=7; utc[14]=11; utc[15]=7; utc[19]=3;
+    now=5000000000ULL; frame(0x21,utc,20,1); GPS_Process((uint32_t)(now/1000));
+    assert(gps_diag.checksum_errors==1 && !gps_diag.utc.packets);
+    frame(0x21,utc,20,0); now+=1000; GPS_Process((uint32_t)(now/1000));
+    assert(gps_diag.utc.packets==1 && gps_diag.utc.first_rx_us==5000000000ULL && gps_diag.utc.rejected_flags==1);
+    utc[19]=7; frame(0x21,utc,20,0); now+=1000; GPS_Process((uint32_t)(now/1000));
+    assert(gps_diag.utc.accepted==1 && gps_diag.utc.first_valid_us==5000001000ULL);
     puts("PASS GPS UART: IRQ packet timestamps survive delayed parsing, checksums, overflow, recovery, receiver epoch reset");
 }
