@@ -1,4 +1,4 @@
-# GPS i PPS — firmware 2.2.0
+# GPS i PPS — firmware 2.2.1
 
 GPS pracuje z częstotliwością **5 Hz**. LSM6DS3 pracuje z natywną ODR
 **104 Hz**; nie ma ustawienia 100 Hz. Rejestrowane są rzeczywiste zbocza DRDY,
@@ -13,7 +13,8 @@ bez zmieniania timestampów w celu wymuszenia idealnego okresu. Dokładnie
 - Fragmenty POSLLH/VELNED/SOL mają 180 ms na złożenie jednej epoki, zamiast
   80 ms. Brak pojedynczego fragmentu nie usuwa od razu poprzedniej dobrej
   pozycji; jej ważność kończy się po 800 ms. Dane różnych iTOW nie są łączone.
-- TFT rysuje cały obszar GPS z jednej migawki co 500 ms. `GPS NO FIX`
+- TFT pobiera spójną migawkę GPS nie częściej niż co sekundę i rysuje ją
+  po jednym wierszu. Przy zaległościach zapisu odświeżanie jest odkładane. `GPS NO FIX`
   oznacza brak ważnej pozycji, `GPS NO DATA` brak świeżej nawigacji UBX.
 - Konfiguracja PPS jest opcjonalnym krokiem po ustawieniu nawigacji 5 Hz.
   Jej błąd nie blokuje odbioru pozycji i logowania IMU.
@@ -116,9 +117,11 @@ połączone pary, `pps_rejected` odrzucone próby, `pps_locks/losses` zmiany loc
 timestampu. `pps_mean_period_ticks` to średnia capture od uruchomienia.
 
 Po wgraniu wykonaj Clean/Build w CubeIDE. Na zewnątrz, przy odsłoniętej
-antenie, sprawdź GPS FIX i `UTC PPS`; następnie po B1 sprawdź metadane i
+antenie, sprawdź GPS FIX; następnie po B1 sprawdź metadane i
 wiersze z `TIME_SYNC_STATE=1`, niepustym GPS_T_MEAS_US oraz `GPS_STATE=N`.
-Sama godzina UTC bez napisu PPS nie potwierdza powiązania zegarów.
+Sama godzina UTC nie potwierdza powiązania zegarów; potwierdzeniem jest
+`TIME_SYNC_STATE=1`. `UTC WAIT` oznacza brak ważnej daty/godziny odbiornika,
+a `PPS?` obok dostępnej godziny — brak lock modelu PPS.
 
 Testy ASan/UBSan obejmują m.in. 15 minut po korekcie iTOW, rozrzut fragmentów
 90 ms, skalę MCU +4700 ppm, granicę tygodnia/roku UTC, zanik referencji,
@@ -132,9 +135,9 @@ Lock potwierdza warunki programowe; dokładność fizyczną, opóźnienia torów
 i maksymalne zużycie stosu trzeba zmierzyć na Nucleo. Automatyczny raport
 RAM i pojedynczych ramek stosu jest generowany podczas budowania.
 
-W kompilacji 2.2.0 statyczny RAM wynosi 16744 B (Release) / 16752 B (Debug);
-pozostaje 3736 / 3728 B na stos i stertę (rezerwacje: stos 2560 B, minimalna
-sterta 512 B; zapas ponad rezerwacje 664 / 656 B).
+W kompilacji 2.2.1 statyczny RAM wynosi 16864 B (Release) / 16872 B (Debug);
+pozostaje 3616 / 3608 B na stos i stertę (rezerwacje: stos 2560 B, minimalna
+sterta 512 B; zapas ponad rezerwacje 544 / 536 B). [Zmiany stosu i przepływu danych](LOGGER_2_2_1.md).
 Bieżące wyniki obu konfiguracji są generowane w `build/*/memory-report.json`.
 To nie jest pomiar szczytu zagnieżdżonych wywołań — sprawdź również
 `stack_free_min_bytes` z rzeczywistego urządzenia. Wyłączono obszerny raport
@@ -142,7 +145,7 @@ GPS_CFG i usunięto parsowanie NMEA z aktywnej ścieżki obsługi podczas SD.
 
 ## Kontrola po wgraniu
 
-- TFT: `LAPTUNE 2.2.0`; zachowaj przewody INT1/INT2 oddalone od toru antenowego GPS.
+- TFT: `LAPTUNE 2.2.1`; zachowaj przewody INT1/INT2 oddalone od toru antenowego GPS.
 - SESSION: `gps_configuration_state=1`, `gps_measurement_ms=200`, `gps_uart_baud=38400`.
 - `pps_configuration_state=1` potwierdza ustawienia wyjścia, nie synchronizację.
   `pps_pulses` i `pps_timtp_packets` powinny rosnąć. Po trzech zgodnych parach:

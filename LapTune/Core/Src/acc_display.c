@@ -26,7 +26,7 @@ static void format_value(char *out, size_t size, float value, uint8_t gyro)
 HAL_StatusTypeDef AccDisplay_Init(void)
 {
     field = 0U; pending = 0U;
-    last_refresh = HAL_GetTick() - 100U;
+    last_refresh = HAL_GetTick() - 1000U;
     if (TFT_Text(4, 0, "LAPTUNE " LAPTUNE_FIRMWARE_VERSION, 2, TFT_RED, TFT_BLACK) != HAL_OK)
         return HAL_ERROR;
     return TFT_Text(4, 120, "ACC +/-16G GPS", 1, TFT_GREY, TFT_BLACK);
@@ -38,7 +38,7 @@ HAL_StatusTypeDef AccDisplay_Update(uint32_t now, const IMU_DisplayData *data,
     char minimum[16], current[16], maximum[16], text[26];
     if (data == NULL) return HAL_ERROR;
     if (!pending) {
-        if ((uint32_t)(now - last_refresh) < 100U) return HAL_OK;
+        if ((uint32_t)(now - last_refresh) < 1000U) return HAL_OK;
         last_refresh = now;
         snapshot = *data;
         healthy = sensor_ok; field = 0U; pending = 1U;

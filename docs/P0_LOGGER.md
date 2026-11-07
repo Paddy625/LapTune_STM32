@@ -1,4 +1,4 @@
-# Kontrakt loggera 2.2.0 (P0 + mapowanie PPS)
+# Kontrakt loggera 2.2.1 (P0 + mapowanie PPS)
 
 Aktualny profil i uruchomienie: [GPS 5 Hz](GPS_NEO6M.md), [PPS i UTC](GPS_PPS.md).
 Historyczny przegląd P0: [P0_REVIEW_2026-11-02.md](P0_REVIEW_2026-11-02.md).
@@ -181,7 +181,10 @@ uruchomienie jest zatrzymywane, aby nie mieszać sesji.
 
 SESSION.json zawiera wersję, boot ID, konfigurację i jej stan weryfikacji,
 dump rejestrów, MON-VER, jednostki, ograniczenia synchronizacji i liczniki.
-Jest aktualizowany po konfiguracji, przy rotacji i zatrzymaniu. Wymiana używa
+Jest aktualizowany po konfiguracji, co około 30 s, przy rotacji i zatrzymaniu.
+Przy zaległościach IMU aktualizacja okresowa i po rotacji czeka na opróżnienie
+bufora do bezpiecznego poziomu; dane TXT nadal są synchronizowane co około 1 s.
+Nowe liczniki opóźnień i brakującego UTC: [opis 2.2.1](LOGGER_2_2_1.md). Wymiana używa
 SESSION.new i zachowuje poprzedni SESSION.bak; po zaniku zasilania ten backup
 może posłużyć do ręcznego odzyskania metadanych. FAT nie zapewnia atomowej
 transakcji wszystkich tych operacji. Importer nie ładuje JSON automatycznie.

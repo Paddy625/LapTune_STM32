@@ -44,7 +44,10 @@ static void lock(void)
 }
 int main(void)
 {
+    GPS_Time_Init(); LogTime empty;
+    assert(GPS_Time_UTCStatus(0,&empty)==GPS_UTC_WAIT_ANCHOR && !empty.valid);
     lock(); uint64_t measured;
+    assert(GPS_Time_UTCStatus(at(4000),&empty)==GPS_UTC_WAIT_ANCHOR);
     nav(4200);
     assert(GPS_Time_Map(2400,4200,at(4200)+100000,&measured) && measured==at(4200));
     assert(!GPS_Time_Map(2400,4200,at(4200)-1,&measured));
@@ -52,7 +55,8 @@ int main(void)
     GPS_Data utc={.year=2026,.month=12,.day=31,.hour=23,.minute=59,.second=59,.datetime_valid=1};
     GPS_Time_Utc(4000,&utc,at(4000)+120000);
     LogTime t;
-    assert(GPS_Time_UTCAt(at(5250),&t));
+    assert(GPS_Time_UTCStatus(at(5250),&t)==GPS_UTC_OK && t.valid);
+    assert(GPS_Time_UTCStatus(at(8000),&empty)==GPS_UTC_OUT_OF_RANGE && !empty.valid);
     assert(t.year==2027 && t.month==1 && t.day==1 && t.hour==0 && t.second==0 && t.millisecond==250);
     assert(GPS_Time_UTCAt(at(3800),&t) && t.second==58 && t.millisecond==800);
     GPS_Time_Utc(4000,&utc,1); assert(!GPS_Time_UTCAt(at(4200),&t));
@@ -61,7 +65,7 @@ int main(void)
     GPS_Time_Service(at(2800)+100000); assert(GPS_Time_Diagnostics().state==1);
     GPS_Time_Service(at(5100));
     assert(!GPS_Time_Diagnostics().state && GPS_Time_Diagnostics().losses==1);
-    assert(!GPS_Time_UTCAt(at(5100),&t));
+    assert(GPS_Time_UTCStatus(at(5100),&t)==GPS_UTC_WAIT_PPS && !t.valid);
 
     /* A one-second-wrong pulse label is rejected against independent NAV week/TOW. */
     GPS_Time_Init(); memset(pulses,0,sizeof(pulses)); sequence=0;

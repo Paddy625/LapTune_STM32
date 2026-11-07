@@ -65,7 +65,8 @@ float ax, max_x=0, min_x=0, ay, max_y=0, min_y=0, az, max_z=0, min_z=0;
 float gx, min_gx=0, max_gx=0, gy, min_gy=0, max_gy=0, gz, min_gz=0, max_gz=0;
 static uint8_t sensor_ok, have_sample, sample_valid;
 static uint32_t last_sensor_retry;
-static uint8_t app_ready;
+static uint8_t app_ready,tft_ready;
+static uint32_t last_ui_slice;
 static uint32_t last_ui_nr;
 
 /* USER CODE END PV */
@@ -84,6 +85,12 @@ void Logger_OnImuRecord(const ImuRecord *record);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+void Logger_ServiceIO(void)
+{
+  if (!app_ready) return;
+  GPS_Process((uint32_t)(Timebase_NowUs()/1000U));
+  ImuStream_Service();
+}
 static void ServiceAcquisition(void)
 {
   if (!app_ready) return;
@@ -188,9 +195,7 @@ int main(void)
   MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
 
-  if (TFT_Init(&hspi1) != HAL_OK || AccDisplay_Init() != HAL_OK) {
-    Error_Handler();
-  }
+  tft_ready=TFT_Init(&hspi1)==HAL_OK && AccDisplay_Init()==HAL_OK;
   if (GPS_Init(&huart3) != HAL_OK) Error_Handler();
   /* GPS configures 5 Hz and PPS asynchronously, independent of fix and SD. */
   app_ready=1; /* GPS RX/configuration can be serviced during initial SD setup. */
@@ -218,7 +223,12 @@ int main(void)
       sensor_ok=Logger_StartAcquisition();
       last_sensor_retry=HAL_GetTick();
     }
-    SDLogger_Process(HAL_GetTick());
+    Logger_ServiceStorage();
+    if (!tft_ready || SDLogger_Backlogged() || (uint32_t)(HAL_GetTick()-last_ui_slice)<100U) {
+      HAL_Delay(1U);
+      continue;
+    }
+    last_ui_slice=HAL_GetTick();
     const IMU_DisplayData readings = {
       .accel = {ax, ay, az},
       .accel_min = {min_x, min_y, min_z},
@@ -229,12 +239,12 @@ int main(void)
     };
     if (AccDisplay_Update(HAL_GetTick(), &readings,
                           sensor_ok && have_sample && sample_valid) != HAL_OK) {
-      Error_Handler();
+      tft_ready=0;
     }
-    if (GPSDisplay_Update(HAL_GetTick(), GPS_GetData(), GPS_GetConfig()) != HAL_OK) {
-      Error_Handler();
+    if (tft_ready && GPSDisplay_Update(HAL_GetTick(), GPS_GetData(), GPS_GetConfig()) != HAL_OK) {
+      tft_ready=0;
     }
-    if (ShowLogState()!=HAL_OK) Error_Handler();
+    if (tft_ready && ShowLogState()!=HAL_OK) tft_ready=0;
     HAL_Delay(1U);
   }
   /* USER CODE END 3 */

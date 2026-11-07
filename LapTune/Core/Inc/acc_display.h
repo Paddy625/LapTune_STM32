@@ -9,7 +9,7 @@ typedef struct {
     float gyro[3], gyro_min[3], gyro_max[3];    /* degrees/s */
 } IMU_DisplayData;
 
-/* Snapshot at 10 Hz. One row per call: AX/GX, AY/GY, AZ/GZ, MIN/NOW/MAX. */
+/* Snapshot at 1 Hz. One row per call: AX/GX, AY/GY, AZ/GZ, MIN/NOW/MAX. */
 HAL_StatusTypeDef AccDisplay_Update(uint32_t now, const IMU_DisplayData *data,
                                    uint8_t sensor_ok);
 

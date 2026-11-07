@@ -2,6 +2,7 @@
 #include "sd_spi.h"
 #include "gps.h"
 #include "gps_time.h"
+#include "session.h"
 #include "gps_fixtures.h"
 #include "ff.h"
 #include "diskio.h"
@@ -180,6 +181,46 @@ static void test_integer_limits(void)
     assert(strstr(text,";18446744073709551615;I;;;1;0;18446744073709551615;18446744073709551540;"));
     free(text);
 }
+/* A synchronous disk write may service GPS/IMU, but must not corrupt the
+   frozen metadata or the next CSV batch that shares its RAM workspace. */
+static void update_during_metadata(void)
+{ imu_diag.acquired=999; gps_diag.uart_errors=88; config.attempts=42; }
+static void test_workspace_and_packing(void)
+{
+    fresh_card(0); GPS_Time_Init(); SDLogger_Start();
+    LogTime utc={.year=2026,.month=11,.day=7,.hour=12,.minute=13,.second=14,.millisecond=999,.valid=1};
+    uint64_t t=7200000001ULL; nav(1000,t,7,3);
+    for (unsigned n=1;n<=16;++n) {
+        ImuRecord r=record(n,t+n*9615U);
+        for (unsigned axis=0;axis<6;++axis) r.raw[axis]=axis&1 ? INT16_MIN : INT16_MAX;
+        assert(append_raw(&r,utc));
+    }
+    SDLogger_Process(tick);
+    assert(sd_diag.max_batch_records>=4 && sd_diag.max_batch_bytes<=1024);
+    unsigned accepted=sd_log_written;
+    uint32_t errors=gps_diag.uart_errors; uint8_t attempts=config.attempts;
+    on_write=update_during_metadata;
+    assert(Session_Write(sd_log_session_dir)==FR_OK && !on_write);
+    char *json=read_file("SESSION.json");
+    assert(strstr(json,"\"last_acquired_nr\": 16") && !strstr(json,"\"gps_uart_errors\": 88"));
+    assert(!strstr(json,"\"gps_configuration_attempts\": 42")); free(json);
+    gps_diag.uart_errors=errors; config.attempts=attempts;
+    assert(sd_log_written==accepted); stop();
+    char *text=read_log("LOG0001.TXT",16),*line=strstr(text,"\r\n")+2;
+    for (unsigned n=1;n<=16;++n) {
+        char *end; assert(strtoul(line,&end,10)==n && *end==';');
+        assert(strstr(line,";15.990296;-15.990784;15.990296;-2293.760000;2293.690000;-2293.760000;"));
+        line=strstr(line,"\r\n")+2;
+    }
+    assert(!*line); free(text);
+    /* Missing UTC is counted once on acceptance, not again on batch retries. */
+    fresh_card(0); GPS_Time_Init(); SDLogger_Start();
+    for (unsigned n=1;n<=16;++n) append(n);
+    ImuRecord waiting=record(17,mono);
+    assert(!append_raw(&waiting,(LogTime){0}) && sd_diag.utc_missing_anchor==16);
+    SDLogger_Process(tick); assert(append_raw(&waiting,(LogTime){0}));
+    stop(); assert(sd_diag.utc_missing_anchor==17 && !sd_diag.utc_missing_pps && !sd_diag.utc_out_of_range);
+}
 static void test_rotation_and_pause(void)
 {
     fresh_card(UINT32_MAX-10000U); SDLogger_Start(); char session[64]; strcpy(session,sd_log_session_dir);
@@ -303,7 +344,7 @@ static void test_nmea_columns(void)
 int main(void)
 {
     image=malloc(SECTORS*512U); assert(image);
-    test_contract(); test_pps_columns(); test_metadata_boundaries(); test_sync_not_retroactive(); test_integer_limits(); test_rotation_and_pause(); test_retry_and_card_change(); test_overload_and_failures(); test_full_and_30_minutes(); test_nmea_columns();
+    test_workspace_and_packing(); test_contract(); test_pps_columns(); test_metadata_boundaries(); test_sync_not_retroactive(); test_integer_limits(); test_rotation_and_pause(); test_retry_and_card_change(); test_overload_and_failures(); test_full_and_30_minutes(); test_nmea_columns();
     assert(f_mount(NULL,"",0)==FR_OK); free(image);
     puts("PASS SD/FatFs: 36-column contract, exact uint64/scales, GPS N/R/I, JSON/LFN, session separation, rotation/retry/removal/full/overload, 30 virtual minutes");
     return 0;

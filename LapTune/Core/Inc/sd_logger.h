@@ -16,7 +16,7 @@ extern char sd_log_session_dir[64];
 extern volatile uint32_t sd_max_pause_us;
 #define SD_LOG_QUEUE_CAPACITY 16U
 #define SD_LOG_HOLDBACK_US 700000U
-#define SD_LOG_SNAPSHOT_INTERVAL_MS 5000U
+#define SD_LOG_SNAPSHOT_INTERVAL_MS 30000U
 typedef struct {
     uint64_t sd_ready_us,first_written_us,first_written_sample_us,last_drop_us;
     uint64_t last_synced_us,last_synced_sample_us;
@@ -24,6 +24,8 @@ typedef struct {
     uint32_t last_drop_nr,last_drop_reason,queue_high_water,queue_depth;
     uint32_t mount_attempts,init_failures,first_error_code,last_error_code;
     uint64_t first_error_us,last_error_us;
+    uint32_t oldest_age_us,max_oldest_age_us,max_batch_records,max_batch_bytes;
+    uint32_t utc_missing_anchor,utc_missing_pps,utc_out_of_range;
     uint8_t clean_shutdown;
 } SDLogger_Diagnostics;
 extern SDLogger_Diagnostics sd_diag;
@@ -36,6 +38,9 @@ uint8_t SDLogger_CanAccept(void);
 uint8_t SDLogger_ShouldWait(uint64_t sample_us);
 uint8_t SDLogger_AppendRaw(const ImuRecord *record,LogTime time);
 void SDLogger_Process(uint32_t now);
+uint8_t SDLogger_Backlogged(void);
+void Logger_ServiceStorage(void);
+void Logger_ServiceIO(void); /* Foreground-only hook; never re-enter storage. */
 void SDLogger_RequestStop(void);
 void SDLogger_RequestResume(void);
 /* Debounced B1 release: stop safely, or resume into a new file. ISR-safe. */

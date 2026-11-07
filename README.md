@@ -1,11 +1,13 @@
 # LapTune_STM32
 
-Firmware loggera STM32, **2.2.0: GPS 5 Hz i synchronizacja PPS na PA0**.
+Firmware loggera STM32, **2.2.1: priorytet zapisu IMU/GPS, mniejsze zużycie stosu**.
 IMU zapisuje rzeczywiste próbki DRDY przy natywnych 104 Hz. UTC próbek jest
 wyznaczane z PPS + TIM-TP + NAV-TIMEUTC, a czas pomiaru GPS jest oddzielony
 od czasu odbioru UART. [Zasady czasu i uruchomienie](docs/GPS_PPS.md).
 Przyczyna problemu NO FIX została ustalona na sprzęcie: przewody INT1/INT2
 prowadzone blisko toru antenowego. Zachowaj poprawione prowadzenie przewodów.
+
+[Zmiany 2.2.1 i diagnostyka po wgraniu](docs/LOGGER_2_2_1.md). TFT służy do diagnostyki i może odświeżać się z opóźnieniem.
 
 **P0: [format danych i DRDY](docs/P0_LOGGER.md)**. Wymagane przewody IMU: **INT1 → PA1 (A1), INT2 → PA4 (A2)**.
 
@@ -22,7 +24,7 @@ resetowania GPS, przywracania fabrycznego ani zapisu ustawień GPS na stałe.
 Eksperymentalny raport `GPS_CFG.TXT` nie jest już generowany przy starcie.
 
 Pobierz `main`, wykonaj **Clean/Build** i wgraj w CubeIDE. TFT pokaże
-**LAPTUNE 2.2.0**. Po uzyskaniu sygnału sprawdź w `SESSION.json`:
+**LAPTUNE 2.2.1**. Po uzyskaniu sygnału sprawdź w `SESSION.json`:
 `gps_configuration_state=1`, `gps_measurement_ms=200`, `pps_configuration_state=1`,
 rosnące `pps_pulses` i `pps_matched`, a następnie `time_sync_state=1`.
 W TXT po synchronizacji pojawią się `GPS_T_MEAS_US` i UTC z milisekundami.
@@ -44,4 +46,4 @@ IMU parameters:
 	- Accelerometer and gyroscope ODR 104Hz; DRDY on PA1/PA4 + SPI2 DMA; 64-bit timestamps independent of GPS/SD
 	- Acceleration sensitivity 0.488mg/LSB
 	- Angular velocity range +/- 2000 degrees/s, sensitivity 0.070 degrees/s/LSB
-	- TFT shows AX/GX, AY/GY, AZ/GZ with MIN/NOW/MAX; GPS display refreshes every 500 ms
+	- TFT shows AX/GX, AY/GY, AZ/GZ with MIN/NOW/MAX; TFT snapshots refresh at most once per second; row rendering yields to storage

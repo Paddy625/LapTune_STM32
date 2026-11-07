@@ -111,18 +111,22 @@ void GPS_Time_Utc(uint32_t tow,const GPS_Data *d,uint64_t rx)
         .minute=d->minute,.second=d->second,.millisecond=d->millisecond,.valid=d->datetime_valid};
     clock_model.utc_itow_ms=tow; clock_model.utc_rx_us=rx;
 }
-uint8_t GPS_Time_UTCAt(uint64_t sample,LogTime *out)
+GPS_UTCStatus GPS_Time_UTCStatus(uint64_t sample,LogTime *out)
 {
-    if (!diag.state || !clock_model.utc.valid || !diag.period_ticks) return 0;
+    *out=(LogTime){0};
+    if (!clock_model.utc.valid) return GPS_UTC_WAIT_ANCHOR;
+    if (!diag.state || !diag.period_ticks) return GPS_UTC_WAIT_PPS;
     uint64_t age=sample>=clock_model.utc_rx_us ? sample-clock_model.utc_rx_us : clock_model.utc_rx_us-sample;
-    if (age>3000000U) return 0; /* A repeated iTOW in a later week cannot revive old UTC. */
+    if (age>3000000U) return GPS_UTC_OUT_OF_RANGE; /* A repeated iTOW in a later week cannot revive old UTC. */
     int64_t offset=(int64_t)sample-(int64_t)clock_model.pulse_us;
-    if (offset< -3000000 || offset>1500000) return 0;
+    if (offset< -3000000 || offset>1500000) return GPS_UTC_OUT_OF_RANGE;
     int64_t utc_offset=(int64_t)clock_model.utc_itow_ms-clock_model.gps_ms%WEEK_MS;
     if (utc_offset>WEEK_MS/2) utc_offset-=WEEK_MS;
     if (utc_offset< -WEEK_MS/2) utc_offset+=WEEK_MS;
     int64_t delta=offset*1000000/diag.period_ticks-utc_offset*1000;
-    if (delta< -3000000 || delta>3000000) return 0;
-    *out=LogClock_ShiftUs(clock_model.utc,delta); return 1;
+    if (delta< -3000000 || delta>3000000) return GPS_UTC_OUT_OF_RANGE;
+    *out=LogClock_ShiftUs(clock_model.utc,delta); return GPS_UTC_OK;
 }
+uint8_t GPS_Time_UTCAt(uint64_t sample,LogTime *out)
+{ return GPS_Time_UTCStatus(sample,out)==GPS_UTC_OK; }
 GPS_TimeDiagnostics GPS_Time_Diagnostics(void) { return diag; }

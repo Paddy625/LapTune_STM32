@@ -4,6 +4,7 @@
 #include "timebase.h"
 #include "boot_identity.h"
 #include "session.h"
+#include "logger_workspace.h"
 #include "../FatFs/ff.h"
 #include <stdio.h>
 #include <string.h>
@@ -23,8 +24,9 @@ static volatile uint8_t stop_requested,resume_requested,automatic_enabled;
 static uint8_t opened,rotation_pending,recovery_pending,acquisition_fault,have_button;
 static FATFS fs;
 static FIL file;
-static char batch[1024];
-static uint8_t session_selected,metadata_gps_known,metadata_config_state,metadata_imu_verified;
+LoggerWorkspace logger_workspace;
+#define batch logger_workspace.batch
+static uint8_t metadata_pending,session_selected,metadata_gps_known,metadata_config_state,metadata_imu_verified;
 char sd_log_session_dir[64];
 volatile uint32_t sd_max_pause_us;
 volatile LogState sd_log_state=LOG_OFF;
@@ -176,7 +178,7 @@ static void connect_card(void)
         sd_log_state=LOG_RECORDING;
         if (!sd_diag.sd_ready_us) sd_diag.sd_ready_us=Timebase_NowUs();
     }
-    snapshot_ms=HAL_GetTick();
+    snapshot_ms=HAL_GetTick(); metadata_pending=0;
 }
 static void pause_since(uint64_t start)
 {
@@ -234,6 +236,15 @@ uint8_t SDLogger_AppendRaw(const ImuRecord *record,LogTime time)
     }
     if (count==CAPACITY) return 0; /* Healthy SD backpressure: caller retains ownership. */
     queue[head].imu=*record; queue[head].time=time;
+    if (!time.valid) {
+        LogTime unused;
+        switch (GPS_Time_UTCStatus(record->t_us,&unused)) {
+        case GPS_UTC_WAIT_ANCHOR: ++sd_diag.utc_missing_anchor; break;
+        case GPS_UTC_WAIT_PPS: ++sd_diag.utc_missing_pps; break;
+        case GPS_UTC_OUT_OF_RANGE: ++sd_diag.utc_out_of_range; break;
+        default: break;
+        }
+    }
     ImuRecord next;
     uint64_t midpoint=record->t_us;
     if (ImuStream_PeekNext(&next) && next.t_us>=record->t_us) midpoint+=(next.t_us-record->t_us)/2U;
@@ -242,55 +253,81 @@ uint8_t SDLogger_AppendRaw(const ImuRecord *record,LogTime time)
     if (count>sd_diag.queue_high_water) sd_diag.queue_high_water=count;
     return 1;
 }
-static void fixed(char out[24],int64_t value,unsigned factor,unsigned digits)
+/* Bounded integer-only CSV writer. No arrays for every field, varargs or float
+   formatting on the acquisition/storage call stack. A short destination never
+   commits a partial record; caller writes preceding records and retries later. */
+typedef struct { char *out; unsigned capacity,used; } TextWriter;
+static void character(TextWriter *w,char ch)
+{ if (w->used<w->capacity) w->out[w->used]=ch; ++w->used; }
+static void u32(TextWriter *w,uint32_t value,unsigned width)
 {
-    uint64_t mag=value<0 ? (uint64_t)-value : (uint64_t)value;
-    (void)snprintf(out,24,"%s%lu.%0*lu",value<0 ? "-" : "",(unsigned long)(mag/factor),(int)digits,(unsigned long)(mag%factor));
+    char digits[10]; unsigned n=0;
+    do { digits[n++]=(char)('0'+value%10U); value/=10U; } while (value);
+    while (width>n) { character(w,'0'); --width; }
+    while (n) character(w,digits[--n]);
 }
-/* nano.specs does not promise %llu. Preserve all 64 bits without printf. */
-static void decimal64(char out[21],uint64_t n)
+static void u64(TextWriter *w,uint64_t value)
 {
-    char reversed[20]; unsigned len=0;
-    do { reversed[len++]=(char)('0'+n%10U); n/=10U; } while (n);
-    for (unsigned i=0;i<len;++i) out[i]=reversed[len-1-i];
-    out[len]=0;
+    char digits[20]; unsigned n=0;
+    do { digits[n++]=(char)('0'+value%10U); value/=10U; } while (value);
+    while (n) character(w,digits[--n]);
 }
-static unsigned format(char out[512],const struct Record *r,uint32_t prior_fix)
+static void fixed(TextWriter *w,int64_t value,uint32_t factor,unsigned digits)
 {
-    char date[16]="",time[24]="",value[6][24]={{0}},navigation[4][24]={{0}},id[16]="",itow[16]="";
+    uint32_t magnitude=(uint32_t)(value<0 ? -value : value);
+    if (value<0) character(w,'-');
+    u32(w,magnitude/factor,1); character(w,'.'); u32(w,magnitude%factor,digits);
+}
+static unsigned format(char *out,unsigned capacity,const struct Record *r,uint32_t prior_fix)
+{
+    TextWriter w={out,capacity,0};
+#define SEP() character(&w,';')
+#define U32(v) do { u32(&w,(v),1); SEP(); } while (0)
+#define U64(v) do { u64(&w,(v)); SEP(); } while (0)
+    U32(r->imu.nr);
     if (r->time.valid) {
-        (void)snprintf(date,sizeof(date),"%04u-%02u-%02u",r->time.year,r->time.month,r->time.day);
-        (void)snprintf(time,sizeof(time),"%02u:%02u:%02u.%03u",r->time.hour,r->time.minute,r->time.second,r->time.millisecond);
+        u32(&w,r->time.year,4); character(&w,'-'); u32(&w,r->time.month,2);
+        character(&w,'-'); u32(&w,r->time.day,2);
     }
-    if (!r->imu.flags) for (unsigned i=0;i<6;++i) fixed(value[i],(int64_t)r->imu.raw[i]*(i<3 ? 488 : 70000),1000000,6);
-    if (r->gps.position_valid) {
-        fixed(navigation[0],r->gps.latitude_e7,10000000,7); fixed(navigation[1],r->gps.longitude_e7,10000000,7);
+    SEP();
+    if (r->time.valid) {
+        u32(&w,r->time.hour,2); character(&w,':'); u32(&w,r->time.minute,2);
+        character(&w,':'); u32(&w,r->time.second,2); character(&w,'.'); u32(&w,r->time.millisecond,3);
     }
-    if (r->gps.epoch_known) {
-        (void)snprintf(id,sizeof(id),"%lu",(unsigned long)r->gps.fix_id);
-        if (!r->gps.nmea) (void)snprintf(itow,sizeof(itow),"%lu",(unsigned long)r->gps.itow_ms);
+    SEP();
+    for (unsigned i=0;i<6;++i) {
+        if (!r->imu.flags) fixed(&w,(int64_t)r->imu.raw[i]*(i<3 ? 488 : 70000),1000000,6);
+        SEP();
     }
-    if (r->gps.speed_valid)
-        fixed(navigation[2],r->gps.speed_millikmh,1000,3);
-    if (r->gps.altitude_valid) {
-        fixed(navigation[3],r->gps.altitude_mm,1000,3);
-    }
+    if (r->gps.position_valid) fixed(&w,r->gps.latitude_e7,10000000,7);
+    SEP();
+    if (r->gps.position_valid) fixed(&w,r->gps.longitude_e7,10000000,7);
+    SEP();
+    if (r->gps.speed_valid) fixed(&w,r->gps.speed_millikmh,1000,3);
+    SEP();
+    if (r->gps.altitude_valid) fixed(&w,r->gps.altitude_mm,1000,3);
+    SEP(); U64(r->imu.t_us);
+    character(&w,!r->gps.position_valid ? 'I' : (r->gps.fix_id==prior_fix ? 'R' : 'N')); SEP();
+    if (r->gps.epoch_known) u32(&w,r->gps.fix_id,1);
+    SEP();
+    if (r->gps.epoch_known && !r->gps.nmea) u32(&w,r->gps.itow_ms,1);
+    SEP(); U32(!r->imu.flags); U32(r->imu.flags);
     uint64_t acc=r->imu.t_us,gyro=r->imu.t_us;
     uint32_t skew=r->imu.acc_minus_gyro_us<0 ? (uint32_t)-(int64_t)r->imu.acc_minus_gyro_us : (uint32_t)r->imu.acc_minus_gyro_us;
     if (r->imu.acc_minus_gyro_us<0) acc=acc>=skew ? acc-skew : 0;
     else gyro=gyro>=skew ? gyro-skew : 0;
-    char t[21],ta[21],tg[21],rx[21]="",measurement[21]="";
-    if (r->gps.epoch_known) decimal64(rx,r->gps.rx_us);
-    if (r->gps.time_sync_state) decimal64(measurement,r->gps.rx_us-r->gps.meas_delay_us);
-    decimal64(t,r->imu.t_us); decimal64(ta,acc); decimal64(tg,gyro);
-    return (unsigned)snprintf(out,512,"%lu;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%c;%s;%s;%u;%u;%s;%s;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%lu;%s;%s;%u\r\n",
-        (unsigned long)r->imu.nr,date,time,value[0],value[1],value[2],value[3],value[4],value[5],
-        navigation[0],navigation[1],navigation[2],navigation[3],t,!r->gps.position_valid ? 'I' : (r->gps.fix_id==prior_fix ? 'R' : 'N'),id,itow,
-        !r->imu.flags,r->imu.flags,ta,tg,
-        (unsigned long)imu_diag.dropped,(unsigned long)imu_diag.spi_errors,(unsigned long)imu_diag.pair_errors,
-        (unsigned long)gps_diag.uart_errors,(unsigned long)gps_diag.checksum_errors,(unsigned long)gps_diag.incomplete,
-        (unsigned long)gps_diag.late,(unsigned long)sd_log_dropped,(unsigned long)sd_max_pause_us,(unsigned long)imu_diag.missed_drdy,
-        (unsigned long)gps_diag.rx_overflows,(unsigned long)gps_diag.invalid_fixes,rx,measurement,r->gps.time_sync_state);
+    U64(acc); U64(gyro);
+    U32(imu_diag.dropped); U32(imu_diag.spi_errors); U32(imu_diag.pair_errors);
+    U32(gps_diag.uart_errors); U32(gps_diag.checksum_errors); U32(gps_diag.incomplete); U32(gps_diag.late);
+    U32(sd_log_dropped); U32(sd_max_pause_us); U32(imu_diag.missed_drdy); U32(gps_diag.rx_overflows); U32(gps_diag.invalid_fixes);
+    if (r->gps.epoch_known) u64(&w,r->gps.rx_us);
+    SEP();
+    if (r->gps.time_sync_state) u64(&w,r->gps.rx_us-r->gps.meas_delay_us);
+    SEP(); u32(&w,r->gps.time_sync_state,1); character(&w,'\r'); character(&w,'\n');
+    return w.used;
+#undef U32
+#undef U64
+#undef SEP
 }
 static void process(uint32_t now)
 {
@@ -316,16 +353,19 @@ static void process(uint32_t now)
         unsigned bytes=0,records=0,available=count;
         uint32_t batch_fix=last_fix_id;
         if (rotation_pending) available=rotation_records;
-        while (records<available && sizeof(batch)-bytes>=512U) {
+        while (records<available && bytes<sizeof(batch)) {
             const struct Record *r=&queue[(tail+records)%CAPACITY];
             /* Format into the static batch itself; a 512-byte temporary on the
                stack would leave too little headroom for nested UART/DMA IRQs. */
-            unsigned len=format(batch+bytes,r,batch_fix);
-            if (len>=512U) { fail(FR_INT_ERR,LOG_CARD_ERROR); break; }
+            unsigned len=format(batch+bytes,sizeof(batch)-bytes,r,batch_fix);
+            if (len>sizeof(batch)) { fail(FR_INT_ERR,LOG_CARD_ERROR); break; }
+            if (len>sizeof(batch)-bytes) break; /* Retry this entire record next batch. */
             bytes+=len; ++records;
             if (r->gps.position_valid) batch_fix=r->gps.fix_id;
         }
-        if (sd_log_state==LOG_RECORDING) {
+        if (records>sd_diag.max_batch_records) sd_diag.max_batch_records=records;
+        if (bytes>sd_diag.max_batch_bytes) sd_diag.max_batch_bytes=bytes;
+        if (sd_log_state==LOG_RECORDING && records) {
             UINT wrote=0;
             uint64_t start=Timebase_NowUs(); FRESULT r=f_write(&file,batch,bytes,&wrote);
             uint64_t elapsed=Timebase_NowUs()-start;
@@ -350,7 +390,7 @@ static void process(uint32_t now)
     }
     if (sd_log_state==LOG_RECORDING && rotation_pending && !rotation_records && !stop_requested) {
         close_file(); rotation_pending=0;
-        if (sd_log_state==LOG_RECORDING) { FRESULT r=Session_Write(sd_log_session_dir); if (r!=FR_OK) fail(r,LOG_CARD_ERROR); }
+        if (sd_log_state==LOG_RECORDING) metadata_pending=1;
         /* Keep accepting into RAM while close/open performs SD I/O. A stop arriving
            here still needs a new file if any samples are already queued. */
         if (sd_log_state==LOG_RECORDING) {
@@ -361,11 +401,11 @@ static void process(uint32_t now)
         FRESULT r=f_sync(&file); last_sync=HAL_GetTick();
         if (r!=FR_OK) fail(r,LOG_CARD_ERROR); else confirmed_sync();
     }
-    if (opened && sd_log_state==LOG_RECORDING && ((uint32_t)(HAL_GetTick()-snapshot_ms)>=SD_LOG_SNAPSHOT_INTERVAL_MS || (!metadata_gps_known && strcmp(GPS_SoftwareVersion(),"unknown")) ||
+    if (opened && sd_log_state==LOG_RECORDING && !SDLogger_Backlogged() && (metadata_pending || (uint32_t)(HAL_GetTick()-snapshot_ms)>=SD_LOG_SNAPSHOT_INTERVAL_MS || (!metadata_gps_known && strcmp(GPS_SoftwareVersion(),"unknown")) ||
         metadata_config_state!=GPS_GetConfig()->state || metadata_imu_verified!=lsm6ds3_config_verified)) {
         FRESULT r=f_sync(&file);
         if (r==FR_OK) { confirmed_sync(); r=Session_Write(sd_log_session_dir); }
-        snapshot_ms=HAL_GetTick(); metadata_gps_known=strcmp(GPS_SoftwareVersion(),"unknown")!=0;
+        metadata_pending=0; snapshot_ms=HAL_GetTick(); metadata_gps_known=strcmp(GPS_SoftwareVersion(),"unknown")!=0;
         metadata_config_state=GPS_GetConfig()->state; metadata_imu_verified=lsm6ds3_config_verified;
         if (r!=FR_OK) fail(r,LOG_CARD_ERROR);
     }

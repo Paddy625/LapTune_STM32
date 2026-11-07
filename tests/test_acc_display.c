@@ -62,31 +62,31 @@ int main(void)
         } /* All six rows must retain the original complete IMU snapshot. */
     }
     unsigned done = calls;
-    assert(AccDisplay_Update(tick+99, &data, 1) == HAL_OK && calls == done);
+    assert(AccDisplay_Update(tick+999, &data, 1) == HAL_OK && calls == done);
     for (unsigned i=0; i<6; ++i) {
-        assert(AccDisplay_Update(tick+100, &data, 0) == HAL_OK);
+        assert(AccDisplay_Update(tick+1000, &data, 0) == HAL_OK);
         assert(strcmp(last+2, i%2U ? "-----.- -----.- -----.-" : "---.--- ---.--- ---.---") == 0);
         assert(last_color == TFT_RED);
     }
     /* A valid shorter/smaller number must overwrite the full old field. */
     data = (IMU_DisplayData){0};
     for (unsigned i=0; i<6; ++i) {
-        assert(AccDisplay_Update(tick+200, &data, 1) == HAL_OK);
+        assert(AccDisplay_Update(tick+2000, &data, 1) == HAL_OK);
         assert(strcmp(last+2, i%2U ? "+0000.0 +0000.0 +0000.0" : "+00.000 +00.000 +00.000") == 0);
     }
     /* Corrupt numbers cannot overrun a column or produce floating conversion UB. */
     data.accel[0] = NAN; data.gyro[0] = INFINITY;
     data.accel_min[0] = -1000; data.gyro_max[0] = 10000;
-    assert(AccDisplay_Update(tick+300, &data, 1) == HAL_OK);
+    assert(AccDisplay_Update(tick+3000, &data, 1) == HAL_OK);
     assert(strcmp(last, "AX------- ------- +00.000") == 0);
-    assert(AccDisplay_Update(tick+300, &data, 1) == HAL_OK);
+    assert(AccDisplay_Update(tick+3000, &data, 1) == HAL_OK);
     assert(strcmp(last, "GX+0000.0 ------- -------") == 0);
     /* Unsigned tick arithmetic across the 32-bit SysTick wrap. */
     tick = UINT32_MAX-50U;
     init_display();
     for (unsigned i=0; i<6; ++i) assert(AccDisplay_Update(tick,&data,1)==HAL_OK);
     done=calls;
-    assert(AccDisplay_Update(48,&data,1)==HAL_OK && calls==done);
-    assert(AccDisplay_Update(49,&data,1)==HAL_OK && calls==done+1);
-    puts("PASS IMU UI: AX/GX AY/GY AZ/GZ, MIN/NOW/MAX, units/precision, GPS bounds, snapshot, errors, 10Hz/wrap");
+    assert(AccDisplay_Update(948,&data,1)==HAL_OK && calls==done);
+    assert(AccDisplay_Update(949,&data,1)==HAL_OK && calls==done+1);
+    puts("PASS IMU UI: AX/GX AY/GY AZ/GZ, MIN/NOW/MAX, units/precision, GPS bounds, snapshot, errors, 1Hz/wrap");
 }

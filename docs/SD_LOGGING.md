@@ -55,6 +55,16 @@ zasilania; nagłe wyłączenie może uszkodzić aktualizowane struktury FAT.
 Stopka `REC S0007/LOG0001.TXT` pokazuje skrót sesji i nazwę pliku.
 B1 opróżnia także próbki czekające na GPS. Przed wyjęciem podczas pracy nadal użyj B1 i zaczekaj na `SD SAVED`.
 
+Od 2.2.1 formatter zapisuje całe rekordy do paczki 1024 B aż do jej
+wypełnienia; niedopasowany ostatni rekord jest ponawiany w kolejnej paczce.
+Po przekroczeniu 900 ms wieku najstarszej próbki IMU pętla wykonuje do ośmiu
+rund zapisu bez przeplatania TFT, obsługując GPS między rundami. Jeśli zaległość
+pozostaje, następny obrót kontynuuje zapis. Migawki JSON są wykonywane co około
+30 s, po zmianie konfiguracji, przy rotacji i po B1; okresowe i rotacyjne
+czekają na spadek zaległości. B1 nadal zapisuje końcową migawkę.
+Pojemności kolejek, synchronizacja TXT co około 1 s i rotacja co 180 s pozostają
+bez zmian. [Pamięć i diagnostyka 2.2.1](LOGGER_2_2_1.md).
+
 ## Diagnostyka błędów
 
 Przykład `SD E03 CMD0 00:FF` zawiera kod FatFs (`03`), etap/błąd sterownika
@@ -91,7 +101,7 @@ W debuggerze: `sd_log_state`, `sd_log_filename`, `sd_log_session_dir`,
 
 ## Testy
 
-`bash tests/run.sh` uruchamia 16 programów z ASan/UBSan, w tym rzeczywisty
+`bash tests/run.sh` uruchamia testy z ASan/UBSan, w tym rzeczywisty
 FatFs na obrazie FAT w RAM, format 36 kolumn, JSON/LFN, rotację, B1,
 wyjmowanie i zmianę karty, błędy, pełny wolumin oraz 30 minut czasu
 symulowanego. Testy sprzętowe i ich ograniczenia: [P0_LOGGER.md](P0_LOGGER.md).
