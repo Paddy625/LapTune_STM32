@@ -1,68 +1,72 @@
 #include "gps.h"
-#include "log_clock.h"
+#include "gps_fixtures.h"
 #include <assert.h>
 #include <stdio.h>
-#include <string.h>
 static UART_HandleTypeDef uart,other;
-static uint8_t *rx; static uint64_t now; static int fail_rearm;
+static uint8_t *rx; static uint64_t now; static int fail_rearm,hold_tx;
+static const uint8_t *held_tx; static uint8_t held_bytes[28]; static unsigned held_length;
 uint64_t Timebase_NowUs(void) { return now; }
 HAL_StatusTypeDef HAL_UART_Receive_IT(UART_HandleTypeDef *u,uint8_t *p,uint16_t len)
 { assert(u==&uart && len==1); rx=p; return fail_rearm ? HAL_ERROR : HAL_OK; }
 HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef *u) { assert(u==&uart); return HAL_OK; }
-HAL_StatusTypeDef HAL_UART_Init(UART_HandleTypeDef *u) { assert(u==&uart && u->Init.BaudRate==9600); return HAL_OK; }
+HAL_StatusTypeDef HAL_UART_Init(UART_HandleTypeDef *u) { assert(u==&uart); return HAL_OK; }
 HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *u,const uint8_t *p,uint16_t n)
-{ assert(u==&uart && n==8 && p[2]==10 && p[3]==4 && !p[4]); GPS_OnTxComplete(u); return HAL_OK; }
+{ assert(u==&uart && p && n>=8); held_tx=p; held_length=n; memcpy(held_bytes,p,n);
+    if (!hold_tx) GPS_OnTxComplete(u);
+    return HAL_OK; }
 HAL_StatusTypeDef HAL_UART_AbortTransmit(UART_HandleTypeDef *u) { assert(u==&uart); return HAL_OK; }
 static void feed(uint8_t ch) { *rx=ch; GPS_OnRxComplete(&uart); }
-static void sentence(const char *body,int corrupt)
+static void frame_class(uint8_t cls,uint8_t id,const uint8_t *p,unsigned n,int corrupt)
 {
-    unsigned sum=0; char line[160];
-    for(const char *p=body;*p;++p) sum^=(uint8_t)*p;
-    snprintf(line,sizeof(line),"$%s*%02X\r\n",body,sum^corrupt);
-    for(const char *p=line;*p;++p) feed(*p);
+    uint8_t f[1032]={0xB5,0x62,cls,id,(uint8_t)n,(uint8_t)(n>>8)};
+    assert(n+8<=sizeof(f)); memcpy(f+6,p,n);
+    uint8_t a=0,b=0; for (unsigned i=2;i<n+6;++i) { a+=f[i]; b+=a; }
+    f[n+6]=a; f[n+7]=b^corrupt; for (unsigned i=0;i<n+8;++i) feed(f[i]);
 }
-static void pair(const char *time)
+static void frame(uint8_t id,const uint8_t *p,unsigned n,int corrupt) { frame_class(1,id,p,n,corrupt); }
+static void epoch(uint32_t itow,int corrupt)
 {
-    char body[128];
-    snprintf(body,sizeof(body),"GPGGA,%s,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,",time); sentence(body,0);
-    snprintf(body,sizeof(body),"GPRMC,%s,A,4807.038,N,01131.000,E,22.4,84.4,041126,,,A",time); sentence(body,0);
+    uint8_t p[28],v[36],s[52]; nav_payloads(itow,p,v,s);
+    frame(2,p,28,0); frame(0x12,v,36,0); frame(6,s,52,corrupt);
 }
-static void process(void) { GPS_Process(now/1000); }
 int main(void)
 {
-    assert(GPS_Init(NULL)==HAL_ERROR); assert(GPS_Init(&uart)==HAL_OK);
+    assert(GPS_Init(NULL)==HAL_ERROR); uart.Init.BaudRate=9600; assert(GPS_Init(&uart)==HAL_OK);
     GPS_OnError(&other); GPS_OnRxComplete(&other); assert(!gps_diag.uart_errors);
-    now=100000; pair("123519"); now=600000; process();
+    hold_tx=1; GPS_Process(0); assert(held_tx && held_length);
+    now=10000; GPS_Process(10); assert(!memcmp(held_tx,held_bytes,held_length));
+    GPS_OnTxComplete(&uart); hold_tx=0;
+    uart.ErrorCode=HAL_UART_ERROR_FE|HAL_UART_ERROR_NE; now=15000; GPS_OnError(&uart); GPS_Process(15);
+    assert(gps_diag.uart_by_phase[0][0]==1 && gps_diag.uart_by_phase[0][1]==1);
+    uart.ErrorCode=0;
+    now=100000; epoch(1000,0); now=600000; GPS_Process(600);
     GPS_Fix f; GPS_Epoch_ForSample(100000,&f);
-    assert(f.position_valid && f.rx_us==100000 && f.published_us==100000 && f.nmea && f.fix_id==1);
-    assert(f.altitude_mm==545400 && f.speed_millikmh==41485 && f.meas_delay_us==UINT32_MAX);
-    assert(GPS_GetData()->position_valid && GPS_GetData()->datetime_valid && GPS_GetData()->satellites==8);
-    LogTime t=LogClock_AtUs(now+100000); assert(t.valid && t.second==19 && t.millisecond==100);
-    GPS_Epoch_ForSample(200000,&f); assert(f.fix_id==1);
-    now=700000; pair("123519"); process(); assert(gps_diag.received_epochs==1);
-    now=1100000; pair("123520"); process(); GPS_Epoch_ForSample(now,&f);
-    assert(f.fix_id==2 && f.position_valid && gps_diag.received_epochs==2);
-    /* RMC without GGA in next epoch must not inherit old altitude. */
-    now=2100000; sentence("GPRMC,123521,A,4807.038,N,01131.000,E,1.0,84.4,041126,,,A",0); process();
-    now=2900000; process(); GPS_Epoch_ForSample(now,&f);
-    assert(f.fix_id==3 && f.position_valid && f.speed_valid && !f.altitude_valid);
-    now=3100000; sentence("GPGGA,123522,,,,,0,00,99.99,,,,,,",0);
-    sentence("GPRMC,123522,V,,,,,,,041126,,,N",0); process(); GPS_Epoch_ForSample(now,&f);
-    assert(f.fix_id==4 && !f.position_valid && gps_diag.invalid_fixes==1);
-    for(unsigned i=0;i<50;++i) { process(); }
-    assert(gps_diag.invalid_fixes==1);
-    assert(!GPS_GetData()->position_valid && !LogClock_AtUs(now).valid);
-    now=4100000; pair("123523"); process(); assert(GPS_GetData()->position_valid);
-    sentence("GPGGA,123523,,,,,0,00,99.99,,,,,,",1); process(); assert(GPS_GetData()->position_valid);
-    assert(gps_diag.checksum_errors==1 && gps_diag.checksum_by_phase[1]==1);
-    now+=3100000; process(); assert(!GPS_GetData()->position_valid && !GPS_GetData()->connected);
-    uart.ErrorCode=HAL_UART_ERROR_FE|HAL_UART_ERROR_ORE; GPS_OnError(&uart); process();
-    assert(gps_diag.uart_by_phase[1][0]==1 && gps_diag.uart_by_phase[1][2]==1);
-    now+=100000; pair("123527"); process(); assert(GPS_GetData()->position_valid);
-    for(unsigned i=0;i<600;++i) { feed('x'); }
-    process();
+    assert(f.position_valid && f.published_us==100000 && GPS_GetData()->position_valid);
+    now=700000; epoch(1200,1); GPS_Process(700); assert(gps_diag.checksum_errors==1);
+    now=881000; GPS_Process(881);
+    assert(GPS_GetData()->position_valid && gps_diag.incomplete==1); /* One incomplete epoch does not erase fresh data. */
+    now=900000; epoch(1400,0); GPS_Process(900); assert(GPS_GetData()->position_valid);
+    GPS_OnError(&uart); GPS_Process(901); assert(gps_diag.uart_errors==2 && !GPS_GetData()->position_valid);
+    now=1100000; epoch(100,0); GPS_Process(1100); assert(GPS_GetData()->position_valid);
+    for (unsigned i=0;i<1100;++i) feed('x');
+    GPS_Process(1101);
     assert(gps_diag.rx_overflows==1 && !GPS_GetData()->position_valid);
-    fail_rearm=1; feed('x'); process(); fail_rearm=0; process();
-    now+=1000000; pair("123528"); process(); assert(GPS_GetData()->position_valid);
-    puts("PASS legacy GPS: NMEA fix, IRQ reception time, immutable paired epochs, partial/invalid epochs, UTC, checksum rejection, overflow and UART recovery; only read-only version polls");
+    fail_rearm=1; feed(0xB5); GPS_Process(1102); fail_rearm=0; GPS_Process(1103);
+    now=1300000; epoch(300,0); GPS_Process(1300); assert(GPS_GetData()->position_valid);
+    assert(gps_diag.receiver.fix_type==3 && gps_diag.receiver.sol_flags==13 && gps_diag.receiver.used_sats==9);
+    uint8_t sky[8+24*12]={0}; sky[4]=24;
+    sky[8+3]=4; sky[8+4]=30; sky[8+23*12+3]=5; sky[8+23*12+4]=55;
+    now+=100; frame(0x30,sky,sizeof(sky),0); GPS_Process(1300);
+    assert(gps_diag.receiver.sky_channels==24 && gps_diag.receiver.cno_nonzero==2 &&
+           gps_diag.receiver.code_locked==2 && gps_diag.receiver.cno_max==55 && gps_diag.receiver.sky_rx_us==now);
+    GPS_Diagnostics copy; GPS_DiagnosticsSnapshot(&copy);
+    sky[8+4]=63; frame(0x30,sky,sizeof(sky),1); GPS_Process(1300);
+    assert(gps_diag.receiver.cno_max==55 && gps_diag.checksum_errors==2);
+    sky[4]=2; frame(0x30,sky,sizeof(sky),0); GPS_Process(1300); assert(gps_diag.receiver.cno_max==55);
+    uint8_t hw[68]={0}; hw[16]=123; hw[18]=0x34; hw[19]=0x12; hw[20]=4; hw[21]=1; hw[22]=8;
+    hw[45]=200; hw[53]=9; frame_class(0x0A,9,hw,68,0); GPS_Process(1300);
+    assert(gps_diag.receiver.antenna_status==4 && gps_diag.receiver.jamming==9 && gps_diag.receiver.agc_count==0x1234);
+    frame_class(0x0A,9,hw,60,0); GPS_Process(1300); assert(gps_diag.receiver.jamming==200);
+    assert(!copy.receiver.antenna_status && copy.receiver.cno_max==55 && GPS_GetData()->position_valid);
+    puts("PASS GPS UART: IRQ packet timestamps survive delayed parsing, checksums, overflow, recovery, receiver epoch reset");
 }

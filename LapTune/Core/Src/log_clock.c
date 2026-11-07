@@ -2,6 +2,7 @@
 #include "gps_time.h"
 static GPS_Data nmea_anchor;
 static uint8_t nmea_mode;
+void LogClock_UsePPS(void) { nmea_mode=0; nmea_anchor=(GPS_Data){0}; }
 void LogClock_UseNMEA(void) { nmea_mode=1; nmea_anchor=(GPS_Data){0}; }
 void LogClock_Update(const GPS_Data *data) { nmea_anchor=*data; }
 static uint8_t days(uint16_t y,uint8_t m)

@@ -1,14 +1,4 @@
-> **2.1.8:** [aktualna procedura](GPS_CONFIG_QUERY.md) wykonuje jeden test maski wyjściowej UART1, pełny przegląd publicznej konfiguracji i okresowy odczyt stanu GPS. Bez resetu i zapisu ustawień do pamięci nieulotnej.
-
-> **2.1.7:** aktualna wersja tylko odczytuje ustawienia do [GPS_CFG.TXT](GPS_CONFIG_QUERY.md). Nie uruchamia procedury przywracania ani resetu opisanej w historii poniżej.
-
-> **Aktualizacja 2.1.6:** GPS wrócił do odbioru NMEA 9600 baud / domyślnie 1 Hz. Konfiguracja 5 Hz, epoki UBX i PPS opisane poniżej są historyczne i nie działają w tej wersji. Aktualny przebieg i ograniczenia: [GPS_RESTORE.md](GPS_RESTORE.md).
-
-# GPS i PPS — firmware 2.1.2
-
-Diagnostyka i zmiana startu GPS w 2.1.2: [GPS_DIAGNOSTICS.md](GPS_DIAGNOSTICS.md).
-Podane na końcu historyczne wielkości RAM dotyczą kompilacji 2.1.0;
-aktualny wynik zawiera `memory-report.json` z danej kompilacji.
+# GPS i PPS — firmware 2.2.0
 
 GPS pracuje z częstotliwością **5 Hz**. LSM6DS3 pracuje z natywną ODR
 **104 Hz**; nie ma ustawienia 100 Hz. Rejestrowane są rzeczywiste zbocza DRDY,
@@ -23,10 +13,8 @@ bez zmieniania timestampów w celu wymuszenia idealnego okresu. Dokładnie
 - Fragmenty POSLLH/VELNED/SOL mają 180 ms na złożenie jednej epoki, zamiast
   80 ms. Brak pojedynczego fragmentu nie usuwa od razu poprzedniej dobrej
   pozycji; jej ważność kończy się po 800 ms. Dane różnych iTOW nie są łączone.
-- Cały obszar GPS na TFT jest rysowany z jednej lokalnej migawki co 200 ms.
-  `GPS NO FIX` oznacza brak rozwiązania odbiornika; `GPS FIX WAIT DATA`
-  oznacza fix zgłoszony przez SOL i oczekiwanie na spójną pozycję.
-  `GPS NO DATA` oznacza brak komunikacji. Odczyt satelitów nie czeka na POSLLH.
+- TFT rysuje cały obszar GPS z jednej migawki co 500 ms. `GPS NO FIX`
+  oznacza brak ważnej pozycji, `GPS NO DATA` brak świeżej nawigacji UBX.
 - Konfiguracja PPS jest opcjonalnym krokiem po ustawieniu nawigacji 5 Hz.
   Jej błąd nie blokuje odbioru pozycji i logowania IMU.
 - Jest jeden model powiązania czasu PPS–GPS i jedna funkcja przeliczania UTC;
@@ -41,13 +29,11 @@ uzyskania fixa anteny w rzeczywistych warunkach.
 PA0 jest wejściem sprzętowego przechwytywania TIM2_CH1. UART pozostaje
 GPS TX → PB11, GPS RX ← PB10. Szczegóły: [GPS_NEO6M.md](GPS_NEO6M.md).
 
-Od 2.1.2 konfiguracja PPS czeka na pierwszy ważny fix GGA/RMC.
-Początkowo działa sprawdzona konfiguracja NMEA 5 Hz, a
-`gps_acquisition_only=1` opisuje ten etap. Dopiero potem włączane są
-epoki UBX i PPS; dane IMU są rejestrowane od początku, niezależnie od GPS.
-NMEA nie zastępuje czasu pomiaru UBX ani nie ustawia lock PPS.
+Od 2.2.0 konfiguracja 5 Hz, strumieni UBX i PPS działa od startu,
+niezależnie od fixa, UTC i SD. Nie ma etapu NMEA ani przełączenia po fixie.
+Akwizycja IMU nie czeka na konfigurację GPS. Nie wykonujemy resetu odbiornika.
 
-Po uzyskaniu fixa, przy UART 38400 i CFG-RATE 200 ms, firmware odczytuje legacy
+Przy UART 38400 i CFG-RATE 200 ms firmware odczytuje legacy
 CFG-TP, zachowuje opóźnienia anteny/RF/użytkownika, ustawia impuls dodatni
 1 Hz, długość 100 ms, odniesienie GPS. Sprawdza ACK i odczyt ustawień.
 Następnie włącza i sprawdza TIM-TP (klasa 0D, ID 01). Konfiguracja nie jest
@@ -60,7 +46,7 @@ protokołu można porównać z [interpretacją TIM-TP w Satpulse](https://github
 (`PrePulse`). Sama najbliższa wiadomość UART nie jest podstawą synchronizacji.
 
 Mapowanie wymaga trzech kolejnych zgodnych par, odstępu 970000–1030000
-ticków MCU i aktualnego NAV-SOL z ważnym tygodniem/iTOW. Weryfikacja NAV
+ticków MCU i aktualnego NAV-SOL z ważnym tygodniem/iTOW (także bez pozycji). Weryfikacja NAV
 sprawdza, czy wyliczony pomiar poprzedza odbiór o 0–500 ms; chroni m.in.
 przed pomyleniem impulsów o sekundę. Zanik PPS na ponad 1,5 s lub świeżej
 kwalifikowanej nawigacji na ponad 800 ms wyłącza lock. Nie ma deklarowanego
@@ -146,10 +132,24 @@ Lock potwierdza warunki programowe; dokładność fizyczną, opóźnienia torów
 i maksymalne zużycie stosu trzeba zmierzyć na Nucleo. Automatyczny raport
 RAM i pojedynczych ramek stosu jest generowany podczas budowania.
 
-W sprawdzonych kompilacjach ARM GCC statyczny RAM wynosi 17024 B (Debug)
-i 17032 B (Release). Z 20480 B pozostaje odpowiednio 3456/3448 B na stos
-i stertę: rezerwacja stosu 2560 B, minimalna sterta 512 B, dodatkowe
-384/376 B. Największe pojedyncze ramki stosu to Session_Write 832 B
-oraz formatowanie rekordu 752 B (Debug). To nie jest suma zagnieżdżonych
-wywołań ani zmierzony szczyt stosu; runtime `stack_free_min_bytes` trzeba
-sprawdzić z rzeczywistego urządzenia.
+W kompilacji 2.2.0 statyczny RAM wynosi 16744 B (Release) / 16752 B (Debug);
+pozostaje 3736 / 3728 B na stos i stertę (rezerwacje: stos 2560 B, minimalna
+sterta 512 B; zapas ponad rezerwacje 664 / 656 B).
+Bieżące wyniki obu konfiguracji są generowane w `build/*/memory-report.json`.
+To nie jest pomiar szczytu zagnieżdżonych wywołań — sprawdź również
+`stack_free_min_bytes` z rzeczywistego urządzenia. Wyłączono obszerny raport
+GPS_CFG i usunięto parsowanie NMEA z aktywnej ścieżki obsługi podczas SD.
+
+## Kontrola po wgraniu
+
+- TFT: `LAPTUNE 2.2.0`; zachowaj przewody INT1/INT2 oddalone od toru antenowego GPS.
+- SESSION: `gps_configuration_state=1`, `gps_measurement_ms=200`, `gps_uart_baud=38400`.
+- `pps_configuration_state=1` potwierdza ustawienia wyjścia, nie synchronizację.
+  `pps_pulses` i `pps_timtp_packets` powinny rosnąć. Po trzech zgodnych parach:
+  `time_sync_state=1`, rosnące `pps_matched`, w TXT `TIME_SYNC_STATE=1`.
+- UTC DATA/CZAS jest puste do synchronizacji i ważnego NAV-TIMEUTC.
+  `GPS_T_RX_US` oznacza koniec ramki; `GPS_T_MEAS_US` pomiar epoki.
+- Zanik PPS usuwa lock; IMU i pozycja działają dalej, bez sztucznych timestampów.
+- Importer powinien używać `GPS_T_MEAS_US` i `TIME_SYNC_STATE`, deduplikować
+  epoki po ID/N/R i uwzględniać skalę PPS. Kod aplikacji Windows nie jest
+  częścią tego repozytorium; zgodność algorytmu ESKF wymaga sprawdzenia w aplikacji.

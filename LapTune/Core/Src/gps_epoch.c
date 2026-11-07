@@ -146,6 +146,8 @@ static void publish(GPS_Data *d,Slot *s,uint64_t now)
             }
         }
         last_itow=f->itow_ms; last_week=s->week; last_valid_rx=f->rx_us; have_itow=1;
+    }
+    if (f->time_valid) {
         GPS_Time_Navigation((uint16_t)s->week,f->itow_ms,f->rx_us);
         uint64_t measurement;
         if (GPS_Time_Map((uint16_t)s->week,f->itow_ms,f->rx_us,&measurement)) {

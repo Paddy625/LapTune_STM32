@@ -29,7 +29,6 @@
 #include "imu_stream.h"
 #include "acc_display.h"
 #include "gps.h"
-#include "gps_report.h"
 #include "gps_display.h"
 #include "sd_spi.h"
 #include "sd_logger.h"
@@ -193,7 +192,7 @@ int main(void)
     Error_Handler();
   }
   if (GPS_Init(&huart3) != HAL_OK) Error_Handler();
-  /* GPS performs one volatile UART output-mask test; no restore or reset. */
+  /* GPS configures 5 Hz and PPS asynchronously, independent of fix and SD. */
   app_ready=1; /* GPS RX/configuration can be serviced during initial SD setup. */
   SD_SPI_Bind(&hspi1);
   SDLogger_Start(); /* Prepare and sync the file before arming acquisition. */
@@ -220,7 +219,6 @@ int main(void)
       last_sensor_retry=HAL_GetTick();
     }
     SDLogger_Process(HAL_GetTick());
-    GPSReport_Process(HAL_GetTick());
     const IMU_DisplayData readings = {
       .accel = {ax, ay, az},
       .accel_min = {min_x, min_y, min_z},

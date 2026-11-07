@@ -84,7 +84,8 @@ void GPS_Time_PulseMessage(const uint8_t *p,unsigned len,uint64_t rx)
     PPS_Capture previous;
     /* NEO-6 TIM-TP describes the NEXT pulse. We configure legacy CFG-TP for
        GPS time, 1 Hz, rising edge. Never label a pulse from nearest UART alone. */
-    if ((p[14]&1U) || (p[14]&0x30U) || (p[15]&15U) || !week || tow>=WEEK_MS || !integral ||
+    /* u-blox 6: byte 15 and flag bits 2..7 are reserved, not newer GNSS IDs. */
+    if ((p[14]&1U) || !week || tow>=WEEK_MS || !integral ||
         !Timebase_PPSBefore(rx,&previous) || previous.overrun || rx-previous.t_us>=900000U) {
         ++diag.rejected; return;
     }

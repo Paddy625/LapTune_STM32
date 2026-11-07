@@ -1,181 +1,176 @@
 #include "gps.h"
 #include "timebase.h"
+#include "gps_time.h"
 #include "log_clock.h"
 #include <stddef.h>
 #include <string.h>
 
-/* One verified, volatile UART1 output-mask change. Every other transmission
-   is a poll; no reset, restore, save, baud/rate or timepulse setters. */
 #define RX_CAPACITY 512U
 static UART_HandleTypeDef *gps_uart;
-static uint8_t rx_byte,tx_packet[28];
-static volatile uint8_t tx_busy,restart_rx,overflow;
-static volatile uint16_t head,tail;
+static uint8_t rx_byte;
+static uint8_t tx_packet[28];
+static volatile uint8_t tx_busy;
+static uint64_t tx_started;
 static volatile uint8_t queue[RX_CAPACITY];
-static uint64_t boundary_times[16],packet_us,tx_started;
-static uint16_t boundary_ends[16];
-static volatile uint8_t boundary_head,boundary_tail;
-static char line[GPS_NMEA_MAX_LENGTH];
-static uint16_t line_len;
+static volatile uint16_t head, tail;
+static volatile uint8_t restart_rx, overflow;
 static GPS_Data data;
 static GPS_ConfigStatus configuration;
-typedef struct { const char *name; uint8_t cls,id,len,arg0,arg1; uint16_t reply_len; uint8_t op; } Query;
-static const Query queries[]={
-#include "gps_queries.inc"
-};
-static const Query monitor_queries[]={
-    {"NAV-STATUS",1,3,0,0,0,16,0}, {"NAV-SVINFO",1,0x30,0,0,0,8,0},
-    {"MON-HW",10,9,0,0,0,60,0}
-};
-#define CONFIG_COUNT (sizeof(queries)/sizeof(queries[0]))
-#define MONITOR_ROUNDS 20U
-#define QUERY_COUNT (CONFIG_COUNT+3U*MONITOR_ROUNDS)
-static uint8_t port_before[20],port_valid;
-static GPS_MaskState mask_state;
-static uint16_t query_index;
-static const Query *current_query(void)
-{ return query_index<CONFIG_COUNT ? &queries[query_index] : &monitor_queries[(query_index-CONFIG_COUNT)%3U]; }
-static GPS_QueryResult result;
-static uint32_t query_ms;
-static uint8_t query_waiting,query_attempts,query_pending,query_done;
-static uint8_t ubx_capture,ubx_state,ubx_class,ubx_id,ubx_a,ubx_b,ubx_check,payload[400];
+typedef enum { DISCOVER_SEND, DISCOVER_WAIT, PORT_SET, SWITCH_WAIT,
+               INFO_SEND,INFO_WAIT,SETTING_SEND, SETTING_DELAY, SETTING_WAIT, CONFIG_DONE, CONFIG_RETRY } Phase;
+static Phase phase;
+static uint32_t phase_ms;
+static uint8_t probe,probes,setting,attempt,port_attempts,setting_ack,pulse_loaded;
+static uint8_t port_config[20];
+/* One volatile profile, independent of fix/UTC: UBX navigation at 5 Hz.
+   No factory restore, navigation reset, antenna or power-mode changes. */
+static const uint8_t classes[]={0xF0,0xF0,0xF0,0xF0,0xF0,0xF0,1,1,1,1};
+static const uint8_t messages[]={1,2,3,5,0,4,2,0x12,6,0x21};
+static const uint8_t rates[]={0,0,0,0,0,0,1,1,1,5};
+enum { NAV_RATE_SETTING=sizeof(messages), PULSE_SETTING, TIMTP_SETTING, ALL_SETTINGS };
+static char sw_version[31]="unknown",hw_version[11]="unknown";
+static uint64_t boundary_times[16];
+static uint16_t boundary_ends[16];
+static volatile uint8_t boundary_head,boundary_tail,irq_ubx_state;
+static uint16_t irq_length,irq_index;
+static uint64_t packet_us;
+static uint8_t ubx_state,ubx_class,ubx_id,ubx_a,ubx_b,ubx_check;
 static uint16_t ubx_length,ubx_index;
+static uint8_t ubx_payload[64];
+static uint8_t diagnostic_index,sky_nonzero,sky_locked,sky_max;
+static uint8_t message_rate(void)
+{ return setting==TIMTP_SETTING ? 1 : rates[setting]; }
+
 static uint16_t le16(const uint8_t *p) { return (uint16_t)p[0]|((uint16_t)p[1]<<8); }
-static void finish_query(GPS_QueryStatus status,uint32_t now)
+static uint32_t le32(const uint8_t *p) { return (uint32_t)le16(p)|((uint32_t)le16(p+2)<<16); }
+static void receiver_status(uint64_t us)
 {
-    const Query *q=current_query();
-    result.name=q->name; result.status=status; result.t_ms=now;
-    result.index=query_index+1; result.total=QUERY_COUNT; result.attempts=query_attempts;
-    result.query_class=q->cls; result.query_id=q->id;
-    result.payload=payload; result.mask_state=mask_state;
-    result.cycle=query_index<CONFIG_COUNT ? 0 : (query_index-CONFIG_COUNT)/3U+1U;
-    query_waiting=0; query_pending=1;
+    GPS_ReceiverStatus *r=&gps_diag.receiver;
+    if (ubx_class==1 && ubx_id==0x30 && ubx_length>=8 &&
+        ubx_length==8U+12U*ubx_payload[4]) {
+        r->sky_channels=ubx_payload[4]; r->cno_nonzero=sky_nonzero;
+        r->code_locked=sky_locked; r->cno_max=sky_max; r->sky_rx_us=us; r->seen|=GPS_RX_SKY;
+    } else if (ubx_class==0x0A && ubx_id==9 && (ubx_length==60 || ubx_length==68)) {
+        r->noise_per_ms=le16(ubx_payload+16); r->agc_count=le16(ubx_payload+18);
+        r->antenna_status=ubx_payload[20]; r->antenna_power=ubx_payload[21]; r->hw_flags=ubx_payload[22];
+        r->jamming=ubx_payload[ubx_length==68 ? 53 : 45];
+        r->hw_rx_us=us; r->seen|=GPS_RX_HW;
+    } else if (ubx_class==6 && ubx_id==0x24 && ubx_length==36) {
+        r->dynamic_model=ubx_payload[2]; r->fix_mode=ubx_payload[3];
+        r->min_elevation=(int8_t)((int16_t)ubx_payload[12]-(ubx_payload[12]>=128 ? 256 : 0));
+        r->pdop_limit=le16(ubx_payload+14); r->seen|=GPS_RX_NAV5;
+    } else if (ubx_class==6 && ubx_id==0x11 && ubx_length==2) {
+        r->power_mode=ubx_payload[1]; r->seen|=GPS_RX_POWER;
+    }
 }
-const GPS_QueryResult *GPS_QueryPending(void) { return query_pending ? &result : NULL; }
-void GPS_QuerySaved(void)
+static void config_error(GPS_ConfigError reason,uint32_t now)
 {
-    if (!query_pending) return;
-    query_pending=0; query_attempts=0;
-    if (++query_index==QUERY_COUNT) query_done=1;
-    query_ms=(uint32_t)(Timebase_NowUs()/1000U);
+    if (setting>=PULSE_SETTING && configuration.state==GPS_CONFIG_READY) {
+        configuration.pps_state=2; configuration.pps_error=reason;
+        phase=CONFIG_DONE; phase_ms=now; return;
+    }
+    configuration.state=GPS_CONFIG_ERROR; configuration.error=reason;
+    phase=CONFIG_RETRY; phase_ms=now;
 }
-unsigned GPS_QueryProgress(void) { return query_index; }
-unsigned GPS_QueryCount(void) { return QUERY_COUNT; }
-unsigned GPS_ConfigQueryCount(void) { return CONFIG_COUNT; }
+static HAL_StatusTypeDef send_frame(uint8_t cls,uint8_t id,const uint8_t *payload,uint8_t length)
+{
+    if (tx_busy || length>20) return HAL_BUSY;
+    uint8_t *packet=tx_packet;
+    packet[0]=0xB5; packet[1]=0x62; packet[2]=cls; packet[3]=id; packet[4]=length; packet[5]=0;
+    if (length) memcpy(packet+6,payload,length);
+    uint8_t a=0,b=0;
+    for (unsigned i=2;i<6U+length;++i) { a+=packet[i]; b+=a; }
+    packet[6U+length]=a; packet[7U+length]=b;
+    tx_started=Timebase_NowUs(); tx_busy=1;
+    HAL_StatusTypeDef result=HAL_UART_Transmit_IT(gps_uart,packet,(uint16_t)(length+8U));
+    if (result!=HAL_OK) { tx_busy=0; ++gps_diag.tx_errors; }
+    return result;
+}
+static HAL_StatusTypeDef send_ubx(uint8_t id,const uint8_t *payload,uint8_t length)
+{ return send_frame(6,id,payload,length); }
+static void diagnostic_poll(void)
+{
+    static const uint8_t classes[]={1,0x0A,6,6},ids[]={0x30,9,0x24,0x11};
+    if (tx_busy || data.position_valid || data.receiver_fix_valid) return;
+    /* Poll only: never change acquisition, antenna, dynamics or power settings. */
+    (void)send_frame(classes[diagnostic_index],ids[diagnostic_index],NULL,0);
+    diagnostic_index=(diagnostic_index+1U)%4U;
+}
 static uint8_t change_baud(uint32_t baud)
 {
     if (tx_busy || HAL_UART_AbortReceive(gps_uart)!=HAL_OK) return 0;
-    tail=head; line_len=ubx_state=restart_rx=overflow=0; boundary_tail=boundary_head;
-    gps_uart->Init.BaudRate=baud; configuration.baud=baud;
+    tail=head; ubx_state=0; restart_rx=overflow=0;
+    boundary_tail=boundary_head; irq_ubx_state=0;
+    gps_uart->Init.BaudRate=baud;
     if (HAL_UART_Init(gps_uart)!=HAL_OK) return 0;
-    return HAL_UART_Receive_IT(gps_uart,&rx_byte,1)==HAL_OK;
+    configuration.baud=baud;
+    return HAL_UART_Receive_IT(gps_uart,&rx_byte,1U)==HAL_OK;
 }
-static HAL_StatusTypeDef send_poll(void)
+static void discover(void)
 {
-    /* Only op=2 can send a setter: copy all UART1 bytes, alter just outProtoMask.
-       query_service permits it only after a validated 9600/0x0007 baseline. */
-    const Query *q=current_query();
-    if (tx_busy) return HAL_BUSY;
-    tx_packet[0]=0xB5; tx_packet[1]=0x62; tx_packet[2]=q->cls; tx_packet[3]=q->id;
-    tx_packet[4]=q->len; tx_packet[5]=0;
-    if (q->op==2) {
-        if (!port_valid || mask_state!=GPS_MASK_READY) return HAL_ERROR;
-        memcpy(tx_packet+6,port_before,20); tx_packet[20]=3; tx_packet[21]=0;
-        mask_state=GPS_MASK_SENT;
-    } else if (q->len) tx_packet[6]=q->arg0;
-    if (q->len==2) tx_packet[7]=q->arg1;
-    uint8_t a=0,b=0;
-    for (unsigned i=2;i<6U+q->len;++i) { a+=tx_packet[i]; b+=a; }
-    tx_packet[6U+q->len]=a; tx_packet[7U+q->len]=b;
-    result.tx_frame=tx_packet; result.tx_length=q->len+8U;
-    tx_started=Timebase_NowUs(); tx_busy=1;
-    HAL_StatusTypeDef status=HAL_UART_Transmit_IT(gps_uart,tx_packet,q->len+8U);
-    if (status!=HAL_OK) { tx_busy=0; ++gps_diag.tx_errors; }
-    return status;
+    GPS_Epoch_ResetStream(&data,Timebase_NowUs());
+    configuration.state=GPS_CONFIG_PENDING; configuration.error=GPS_CFG_OK;
+    configuration.measurement_ms=configuration.nav_rate=configuration.time_ref=0;
+    configuration.attempts=0; configuration.pps_state=configuration.pps_error=pulse_loaded=0;
+    configuration.acquisition_only=0;
+    probe=(gps_uart->Init.BaudRate==GPS_RUN_BAUD); probes=setting=attempt=port_attempts=0;
+    phase=DISCOVER_SEND;
 }
-static void received(uint32_t now)
+static void packet_received(uint32_t now)
 {
-    if (!query_waiting || query_pending || query_done) return;
-    const Query *q=current_query();
-    uint8_t nak=ubx_class==5 && ubx_id==0 && ubx_length==2 && payload[0]==q->cls && payload[1]==q->id;
-    uint8_t ack=ubx_class==5 && ubx_id==1 && ubx_length==2 && payload[0]==q->cls && payload[1]==q->id;
-    if (q->op==2) {
-        if (!ack && !nak) return;
-        mask_state=nak ? GPS_MASK_REJECTED : GPS_MASK_ACKED;
-    } else if (!nak) {
-        if (ubx_class!=q->cls || ubx_id!=q->id) return;
-        if (q->id==1 && q->cls==6 && ubx_length>=2 && (payload[0]!=q->arg0 || payload[1]!=q->arg1)) return;
-        if (q->id==0 && q->cls==6 && ubx_length && payload[0]!=q->arg0) return;
-        if (q->cls==6 && (q->id==2 || q->id==0x31) && ubx_length && payload[0]!=q->arg0) return;
+    uint64_t us=packet_us;
+    GPS_Epoch_Service(&data,us);
+    GPS_Epoch_Packet(&data,ubx_class,ubx_id,ubx_payload,ubx_length,us);
+    receiver_status(us);
+    if (ubx_class==0x0D && ubx_id==1 && configuration.pps_state==1)
+        GPS_Time_PulseMessage(ubx_payload,ubx_length,us);
+    if (ubx_class==0x0A && ubx_id==4 && ubx_length>=40) {
+        memcpy(sw_version,ubx_payload,30); sw_version[30]=0;
+        memcpy(hw_version,ubx_payload+30,10); hw_version[10]=0;
+        if (phase==INFO_WAIT) phase=SETTING_SEND;
     }
-    result.rx_present=1; result.rx_class=ubx_class; result.rx_id=ubx_id; result.length=ubx_length;
-    result.stored=ubx_length<sizeof(payload) ? ubx_length : sizeof(payload);
-    result.ck_a=ubx_a; result.ck_b=ubx_b;
-    GPS_QueryStatus status=GPS_QUERY_OK;
-    if (nak) status=GPS_QUERY_NAK;
-    else if (ubx_length>sizeof(payload)) status=GPS_QUERY_TRUNCATED;
-    else if (ubx_length<q->reply_len || (q->cls==6 && q->id==1 && ubx_length!=3 && ubx_length!=8) ||
-        (q->cls==1 && q->id==0x30 && ubx_length!=8U+12U*payload[4])) status=GPS_QUERY_MALFORMED;
-    if (status==GPS_QUERY_OK && q->op==1) {
-        if (ubx_length!=20 || memcmp(payload+8,"\x80\x25\x00\x00",4)) status=GPS_QUERY_MALFORMED;
-        else {
-            memcpy(port_before,payload,20); port_valid=1;
-            mask_state=le16(payload+14)==7 ? GPS_MASK_READY :
-                (le16(payload+14)==3 ? GPS_MASK_ALREADY : GPS_MASK_UNEXPECTED);
-        }
+    if (ubx_class==5 && ubx_id==1 && ubx_length==2 && ubx_payload[0]==6 &&
+        (phase==SETTING_DELAY || phase==SETTING_WAIT) && ubx_payload[1]==configuration.message_id)
+        setting_ack=1;
+    if (ubx_class==5 && ubx_id==0 && ubx_length==2 && ubx_payload[0]==6 &&
+        (((phase==DISCOVER_WAIT || phase==SWITCH_WAIT) && ubx_payload[1]==0) ||
+         ((phase==SETTING_DELAY || phase==SETTING_WAIT) && ubx_payload[1]==configuration.message_id))) {
+        config_error(GPS_CFG_NAK,now); return;
     }
-    if (status==GPS_QUERY_OK && q->op==3 && port_valid) {
-        uint8_t same=ubx_length==20 && le16(payload+14)==3;
-        for (unsigned i=0;i<20 && same;++i) if (i!=14 && i!=15 && payload[i]!=port_before[i]) same=0;
-        if (same) mask_state=GPS_MASK_VERIFIED;
-        else { mask_state=GPS_MASK_VERIFY_FAILED; status=GPS_QUERY_VERIFY_FAILED; }
+    if (ubx_class!=6) return;
+    if (phase==DISCOVER_WAIT && ubx_id==0 && ubx_length==20 && ubx_payload[0]==1) {
+        if (le32(ubx_payload+8)!=gps_uart->Init.BaudRate) return;
+        memcpy(port_config,ubx_payload,sizeof(port_config));
+        if (configuration.baud==GPS_RUN_BAUD && (le16(port_config+12)&3U)==3U &&
+            le16(port_config+14)==3U) {
+            setting=attempt=0; phase=INFO_SEND;
+        } else phase=PORT_SET;
+    } else if (phase==SETTING_WAIT) {
+        uint8_t message_setting=setting<NAV_RATE_SETTING || setting==TIMTP_SETTING;
+        if (message_setting && ubx_id==1 && (ubx_length==3 || ubx_length==8)) {
+            uint8_t cls=setting<NAV_RATE_SETTING ? classes[setting] : 0x0D;
+            uint8_t id=setting<NAV_RATE_SETTING ? messages[setting] : 1;
+            uint8_t expected=message_rate();
+            if (ubx_payload[0]!=cls || ubx_payload[1]!=id) return;
+            if (ubx_payload[ubx_length==8 ? 3 : 2]!=expected || !setting_ack) { config_error(GPS_CFG_VERIFY,now); return; }
+        } else if (setting==NAV_RATE_SETTING && ubx_id==8 && ubx_length==6) {
+            configuration.measurement_ms=le16(ubx_payload);
+            configuration.nav_rate=le16(ubx_payload+2); configuration.time_ref=le16(ubx_payload+4);
+            if (configuration.measurement_ms!=GPS_MEASUREMENT_MS || configuration.nav_rate!=1 || configuration.time_ref!=1 || !setting_ack) {
+                config_error(GPS_CFG_VERIFY,now); return;
+            }
+            configuration.state=GPS_CONFIG_READY; configuration.error=GPS_CFG_OK;
+        } else if (setting==PULSE_SETTING && ubx_id==7 && ubx_length==20) {
+            if (!pulse_loaded) {
+                /* Preserve antenna/RF/user delays and undocumented legacy flags. */
+                memcpy(port_config,ubx_payload,20);
+                const uint8_t desired[]={0x40,0x42,0x0F,0,0xA0,0x86,1,0,1,1}; /* 1 Hz, 100 ms, positive, GPS time. */
+                memcpy(port_config,desired,sizeof(desired)); pulse_loaded=1; attempt=0; phase=SETTING_SEND; return;
+            }
+            if (memcmp(port_config,ubx_payload,20) || !setting_ack) { config_error(GPS_CFG_VERIFY,now); return; }
+        } else return;
+        ++setting; attempt=0; phase=SETTING_SEND;
     }
-    if (status==GPS_QUERY_OK && q->cls==6 && q->id==8) {
-        configuration.measurement_ms=le16(payload); configuration.nav_rate=le16(payload+2); configuration.time_ref=le16(payload+4);
-    }
-    finish_query(status,now);
-}
-static void query_service(uint32_t now)
-{
-    if (query_pending || query_done) return;
-    if (query_waiting) {
-        if ((uint32_t)(now-query_ms)<1500U) return;
-        query_waiting=0;
-        if (query_attempts>=2 || current_query()->op==2) { finish_query(GPS_QUERY_TIMEOUT,now); return; }
-    } else {
-        uint32_t delay=!query_index ? 3000U : 250U;
-        if (query_index>=CONFIG_COUNT && (query_index-CONFIG_COUNT)%3U==0) delay=30000U;
-        if ((uint32_t)(now-query_ms)<delay) return;
-    }
-    if (tx_busy) return;
-    result=(GPS_QueryResult){0};
-    if (current_query()->op==2 && (!port_valid || mask_state!=GPS_MASK_READY)) {
-        finish_query(GPS_QUERY_SKIPPED,now); return;
-    }
-    ++query_attempts; query_waiting=1; query_ms=now;
-    if (send_poll()!=HAL_OK) finish_query(GPS_QUERY_TX_ERROR,now);
-}
-static void checksum_error(void)
-{
-    uint64_t now=Timebase_NowUs();
-    if (!gps_diag.checksum_errors) gps_diag.checksum_first_us=now;
-    gps_diag.checksum_last_us=now; ++gps_diag.checksum_errors;
-    ++gps_diag.checksum_by_phase[1];
-}
-static int hex_digit(char ch)
-{
-    if (ch>='0' && ch<='9') return ch-'0';
-    if (ch>='A' && ch<='F') return ch-'A'+10;
-    if (ch>='a' && ch<='f') return ch-'a'+10;
-    return -1;
-}
-static uint8_t nmea_checksum_ok(const char *text)
-{
-    const char *star=strchr(text,'*');
-    if (!star || strlen(star)!=3 || hex_digit(star[1])<0 || hex_digit(star[2])<0) return 0;
-    uint8_t sum=0;
-    for (const char *p=text+1;p<star;++p) sum^=(uint8_t)*p;
-    return sum==(uint8_t)((hex_digit(star[1])<<4)|hex_digit(star[2]));
 }
 static void ubx_byte(uint8_t ch,uint32_t now)
 {
@@ -185,51 +180,167 @@ static void ubx_byte(uint8_t ch,uint32_t now)
     case 2: ubx_class=ch; ubx_state=3; break;
     case 3: ubx_id=ch; ubx_state=4; break;
     case 4: ubx_length=ch; ubx_state=5; break;
-    case 5: ubx_length|=(uint16_t)ch<<8; ubx_index=0; ubx_capture=!query_pending; ubx_state=ubx_length>1024 ? 0 : (ubx_length ? 6 : 7); break;
-    case 6: if (ubx_capture && !query_pending && ubx_index<sizeof(payload)) payload[ubx_index]=ch; if (++ubx_index==ubx_length) ubx_state=7; break;
-    case 7: ubx_check=ch; ubx_state=8; break;
-    default:
-        ubx_state=0;
-        if (ubx_check!=ubx_a || ch!=ubx_b) checksum_error();
-        else if (ubx_capture) received(now);
+    case 5:
+        ubx_length|=(uint16_t)ch<<8; ubx_index=0;
+        sky_nonzero=sky_locked=sky_max=0;
+        ubx_state=ubx_length>1024U ? 0 : (ubx_length ? 6 : 7); break;
+    case 6:
+        if (ubx_index<sizeof(ubx_payload)) ubx_payload[ubx_index]=ch;
+        /* Summarise every SV block, including those beyond the 64-byte buffer.
+           Results become visible only after the full frame passes checksum. */
+        if (ubx_class==1 && ubx_id==0x30 && ubx_index>=8) {
+            unsigned offset=(ubx_index-8U)%12U;
+            if (offset==3 && (ch&7U)>=4) ++sky_locked;
+            if (offset==4 && ch) { ++sky_nonzero; if (ch>sky_max) sky_max=ch; }
+        }
+        if (++ubx_index==ubx_length) ubx_state=7;
         break;
+    case 7: ubx_check=ch; ubx_state=8; break;
+    case 8:
+        ubx_state=0;
+        if (ubx_check==ubx_a && ch==ubx_b &&
+            (ubx_length<=sizeof(ubx_payload) || (ubx_class==0x0A && (ubx_id==4 || ubx_id==9)) ||
+             (ubx_class==1 && ubx_id==0x30))) packet_received(now);
+        else if (ubx_check!=ubx_a || ch!=ubx_b) {
+            if (!gps_diag.checksum_errors) gps_diag.checksum_first_us=packet_us;
+            gps_diag.checksum_last_us=packet_us;
+            ++gps_diag.checksum_errors; ++gps_diag.checksum_by_phase[configuration.state==GPS_CONFIG_READY];
+        }
+        break;
+    default: ubx_state=0; break;
     }
 }
-HAL_StatusTypeDef GPS_Init(UART_HandleTypeDef *uart)
+static void configure(uint32_t now)
 {
-    if (!uart) return HAL_ERROR;
-    gps_uart=uart; head=tail=line_len=0; restart_rx=overflow=tx_busy=0;
-    boundary_head=boundary_tail=ubx_state=0; packet_us=0;
-    GPS_NMEA_Init(&data); GPS_Epoch_InitNMEA(); LogClock_UseNMEA();
-    memset(&configuration,0,sizeof(configuration)); configuration.baud=GPS_BOOT_BAUD;
-    configuration.state=GPS_CONFIG_PASSIVE;
-    query_index=query_waiting=query_attempts=query_pending=query_done=port_valid=0;
-    mask_state=GPS_MASK_NO_BASELINE;
-    query_ms=(uint32_t)(Timebase_NowUs()/1000U); result=(GPS_QueryResult){0};
-    return change_baud(GPS_BOOT_BAUD) ? HAL_OK : HAL_ERROR;
-}
-void GPS_OnRxComplete(UART_HandleTypeDef *uart)
-{
-    if (uart!=gps_uart || !gps_uart) return;
-    uint16_t next=(head+1U)%RX_CAPACITY;
-    if (next==tail) overflow=1;
-    else {
-        queue[head]=rx_byte; head=next;
-        if (rx_byte=='\n') {
-            uint8_t n=(boundary_head+1U)%16U;
-            if (n==boundary_tail) overflow=1;
+    static const uint8_t rate[]={(uint8_t)GPS_MEASUREMENT_MS,(uint8_t)(GPS_MEASUREMENT_MS>>8),1,0,1,0}; /* 200 ms, every cycle, GPS time. */
+    HAL_StatusTypeDef result=HAL_OK;
+    switch (phase) {
+    case DISCOVER_SEND: {
+        uint8_t port=1; configuration.message_id=0;
+        result=send_ubx(0,&port,1); phase=DISCOVER_WAIT; phase_ms=now; break;
+    }
+    case DISCOVER_WAIT:
+        if ((uint32_t)(now-phase_ms)>=500U) {
+            if (++probes>=4) config_error(GPS_CFG_NO_RESPONSE,now);
             else {
-                boundary_times[boundary_head]=Timebase_NowUs(); boundary_ends[boundary_head]=head;
-#ifndef LAPTUNE_HOST_TEST
-                __DMB();
-#endif
-                boundary_head=n;
+                probe^=1;
+                if (!change_baud(probe ? GPS_RUN_BAUD : GPS_BOOT_BAUD)) config_error(GPS_CFG_UART,now);
+                else phase=DISCOVER_SEND;
             }
         }
+        break;
+    case PORT_SET:
+        if (port_attempts>=3) { config_error(GPS_CFG_VERIFY,now); break; }
+        configuration.attempts=++port_attempts;
+        port_config[8]=(uint8_t)GPS_RUN_BAUD; port_config[9]=(uint8_t)(GPS_RUN_BAUD>>8);
+        port_config[10]=port_config[11]=0;
+        port_config[12]|=3; port_config[14]=3; port_config[15]=0;
+        result=send_ubx(0,port_config,sizeof(port_config)); phase=SWITCH_WAIT; phase_ms=now; break;
+    case SWITCH_WAIT:
+        if ((uint32_t)(now-phase_ms)>=60U) {
+            if (!change_baud(GPS_RUN_BAUD)) config_error(GPS_CFG_UART,now);
+            else { probe=1; probes=0; phase=DISCOVER_SEND; }
+        }
+        break;
+    case SETTING_SEND:
+        if (setting==ALL_SETTINGS) {
+            configuration.pps_state=1; configuration.pps_error=GPS_CFG_OK;
+            phase=CONFIG_DONE; phase_ms=now; break;
+        }
+        setting_ack=0; configuration.attempts=++attempt;
+        if (setting<NAV_RATE_SETTING || setting==TIMTP_SETTING) {
+            uint8_t payload[]={setting<NAV_RATE_SETTING ? classes[setting] : 0x0D,
+                setting<NAV_RATE_SETTING ? messages[setting] : 1,
+                message_rate()};
+            configuration.message_id=1; result=send_ubx(1,payload,3);
+        } else if (setting==NAV_RATE_SETTING) {
+            configuration.message_id=8; result=send_ubx(8,rate,sizeof(rate));
+        } else {
+            configuration.message_id=7;
+            result=send_ubx(7,pulse_loaded ? port_config : NULL,pulse_loaded ? 20 : 0);
+            if (!pulse_loaded) { phase=SETTING_WAIT; phase_ms=now; break; }
+        }
+        phase=SETTING_DELAY; phase_ms=now; break;
+    case SETTING_DELAY:
+        if ((uint32_t)(now-phase_ms)>=40U) {
+            if (setting<NAV_RATE_SETTING || setting==TIMTP_SETTING) {
+                uint8_t payload[]={setting<NAV_RATE_SETTING ? classes[setting] : 0x0D,
+                    setting<NAV_RATE_SETTING ? messages[setting] : 1}; result=send_ubx(1,payload,2);
+            } else result=send_ubx(configuration.message_id,NULL,0);
+            phase=SETTING_WAIT; phase_ms=now;
+        }
+        break;
+    case SETTING_WAIT:
+        if ((uint32_t)(now-phase_ms)>=500U) {
+            if (attempt>=3) config_error(GPS_CFG_NO_RESPONSE,now); else phase=SETTING_SEND;
+        }
+        break;
+    case CONFIG_DONE:
+        if (!data.connected && (uint32_t)(now-data.sentence_ms)>=GPS_FRESH_MS) discover();
+        else if ((uint32_t)(now-phase_ms)>=1000U) { diagnostic_poll(); phase_ms=now; }
+        break;
+    case INFO_SEND:
+        result=send_frame(0x0A,4,NULL,0); phase=INFO_WAIT; phase_ms=now; break;
+    case INFO_WAIT:
+        if ((uint32_t)(now-phase_ms)>=500U) phase=SETTING_SEND;
+        break;
+    default:
+        if ((uint32_t)(now-phase_ms)>=2000U) {
+            if (!change_baud(gps_uart->Init.BaudRate)) config_error(GPS_CFG_UART,now); else discover();
+        }
+        break;
     }
-    if (!restart_rx && HAL_UART_Receive_IT(gps_uart,&rx_byte,1)!=HAL_OK) restart_rx=1;
+    if (result!=HAL_OK) config_error(GPS_CFG_UART,now);
 }
-void GPS_OnTxComplete(UART_HandleTypeDef *uart) { if (uart==gps_uart) tx_busy=0; }
+
+HAL_StatusTypeDef GPS_Init(UART_HandleTypeDef *uart)
+{
+    if (uart == NULL) return HAL_ERROR;
+    gps_uart = uart; head = tail = 0;
+    restart_rx = overflow = tx_busy = 0;
+    diagnostic_index=0;
+    GPS_NMEA_Init(&data);
+    GPS_Epoch_Init(); LogClock_UsePPS();
+    boundary_head=boundary_tail=irq_ubx_state=0;
+    memset(&configuration,0,sizeof(configuration)); configuration.baud=uart->Init.BaudRate;
+    ubx_state=0; discover();
+    return HAL_UART_Receive_IT(gps_uart, &rx_byte, 1U);
+}
+
+void GPS_OnRxComplete(UART_HandleTypeDef *uart)
+{
+    if (uart != gps_uart || gps_uart == NULL) return;
+    uint16_t next = (head + 1U) % RX_CAPACITY;
+    if (next == tail) overflow = 1;
+    else { queue[head] = rx_byte; head = next; }
+    /* Only track frame length in IRQ; parsing/checksums stay in foreground. */
+    uint8_t ch=rx_byte;
+    switch (irq_ubx_state) {
+    case 0: if (ch==0xB5) irq_ubx_state=1; break;
+    case 1: irq_ubx_state=ch==0x62 ? 2 : (ch==0xB5 ? 1 : 0); break;
+    case 2: irq_ubx_state=3; break;
+    case 3: irq_ubx_state=4; break;
+    case 4: irq_length=ch; irq_ubx_state=5; break;
+    case 5: irq_length|=(uint16_t)ch<<8; irq_index=0; irq_ubx_state=irq_length>1024 ? 0 : (irq_length ? 6 : 7); break;
+    case 6: if (++irq_index==irq_length) irq_ubx_state=7; break;
+    case 7: irq_ubx_state=8; break;
+    default: {
+        uint8_t n=(boundary_head+1U)%16U;
+        if (n==boundary_tail) overflow=1;
+        else { boundary_times[boundary_head]=Timebase_NowUs(); boundary_ends[boundary_head]=head;
+#ifndef LAPTUNE_HOST_TEST
+            __DMB();
+#endif
+            boundary_head=n; }
+        irq_ubx_state=0; break;
+    }
+    }
+    if (!restart_rx && HAL_UART_Receive_IT(gps_uart, &rx_byte, 1U) != HAL_OK)
+        restart_rx = 1;
+}
+
+void GPS_OnTxComplete(UART_HandleTypeDef *uart)
+{ if (uart==gps_uart) tx_busy=0; }
 void GPS_OnError(UART_HandleTypeDef *uart)
 {
     if (uart!=gps_uart || !gps_uart) return;
@@ -238,7 +349,7 @@ void GPS_OnError(UART_HandleTypeDef *uart)
     gps_diag.uart_last_us=t; ++gps_diag.uart_errors;
     const uint32_t bits[]={HAL_UART_ERROR_FE,HAL_UART_ERROR_NE,HAL_UART_ERROR_ORE,HAL_UART_ERROR_PE};
     uint32_t error=uart->ErrorCode,known=0;
-    unsigned phase_index=1; /* Polling does not reconfigure the UART or receiver. */
+    unsigned phase_index=configuration.state==GPS_CONFIG_READY;
     uint32_t previous=0; for (unsigned i=0;i<5;++i) previous+=gps_diag.uart_by_phase[phase_index][i];
     if (!previous) gps_diag.uart_phase_first_us[phase_index]=t;
     gps_diag.uart_phase_last_us[phase_index]=t;
@@ -256,22 +367,26 @@ void GPS_DiagnosticsSnapshot(GPS_Diagnostics *out)
     __set_PRIMASK(mask);
 #endif
 }
+
 void GPS_Process(uint32_t now)
 {
-    if (!gps_uart) return;
+    if (gps_uart == NULL) return;
     if (tx_busy && Timebase_NowUs()-tx_started>100000U) {
         (void)HAL_UART_AbortTransmit(gps_uart); tx_busy=0; ++gps_diag.tx_errors;
-        if (!query_pending && !query_done) finish_query(GPS_QUERY_TX_ERROR,now);
+        if (phase!=CONFIG_DONE) config_error(GPS_CFG_UART,now);
     }
     if (overflow) { overflow=0; ++gps_diag.rx_overflows; restart_rx=1; }
     if (restart_rx) {
-        restart_rx=0; (void)HAL_UART_AbortReceive(gps_uart);
-        tail=head; line_len=ubx_state=0; boundary_tail=boundary_head;
+        restart_rx = 0;
+        (void)HAL_UART_AbortReceive(gps_uart);
+        tail = head; ubx_state = 0;
+        boundary_tail=boundary_head; irq_ubx_state=0;
         GPS_Epoch_ResetStream(&data,Timebase_NowUs());
-        if (HAL_UART_Receive_IT(gps_uart,&rx_byte,1)!=HAL_OK) restart_rx=1;
+        if (HAL_UART_Receive_IT(gps_uart, &rx_byte, 1U) != HAL_OK) restart_rx = 1;
     }
-    for (unsigned n=0;n<RX_CAPACITY && tail!=head;++n) {
-        uint8_t ch=queue[tail]; tail=(tail+1U)%RX_CAPACITY;
+    /* Bounded work even if bytes keep arriving during parsing. */
+    for (unsigned n = 0; n < RX_CAPACITY && tail != head; ++n) {
+        uint8_t ch = queue[tail]; tail = (tail + 1U) % RX_CAPACITY;
         if (boundary_tail!=boundary_head && boundary_ends[boundary_tail]==tail) {
 #ifndef LAPTUNE_HOST_TEST
             __DMB();
@@ -279,27 +394,28 @@ void GPS_Process(uint32_t now)
             packet_us=boundary_times[boundary_tail]; boundary_tail=(boundary_tail+1U)%16U;
         }
         if (ubx_state) { ubx_byte(ch,now); continue; }
-        if (ch==0xB5) { ubx_state=1; line_len=0; continue; }
-        if (ch=='$') { line_len=0; line[line_len++]='$'; }
-        else if (ch=='\n' && line_len) {
-            line[line_len]=0;
-            if (!nmea_checksum_ok(line)) checksum_error();
-            else if (GPS_NMEA_Parse(&data,line,now)) {
-                ++gps_diag.nmea_sentences; gps_diag.nmea_last_us=packet_us;
-                if (data.position_valid) { ++gps_diag.nmea_fix_sentences; gps_diag.nmea_last_fix_us=packet_us; }
-                GPS_Epoch_NMEA(&data,line,packet_us); LogClock_Update(&data);
-            }
-            line_len=0;
-        } else if (ch!='\r' && line_len) {
-            if (line_len<sizeof(line)-1U) line[line_len++]=(char)ch; else line_len=0;
-        }
+        if (ch==0xB5) ubx_state=1;
     }
-    GPS_NMEA_Expire(&data,now);
-    data.receiver_fix_valid=data.position_valid;
-    GPS_Epoch_Service(&data,Timebase_NowUs());
-    query_service(now);
+    uint64_t current=Timebase_NowUs();
+    GPS_Epoch_Service(&data,current); GPS_Time_Service(current);
+    LogTime utc;
+    if (GPS_Time_UTCAt(current,&utc)) {
+        data.year=utc.year; data.month=utc.month; data.day=utc.day;
+        data.hour=utc.hour; data.minute=utc.minute; data.second=utc.second; data.millisecond=utc.millisecond;
+        data.datetime_ms=(uint32_t)(current/1000U); data.datetime_valid=1;
+    }
+    data.time_sync_state=GPS_Time_Diagnostics().state;
+    if (!tx_busy) configure(now);
 }
+
 const GPS_Data *GPS_GetData(void) { return &data; }
 const GPS_ConfigStatus *GPS_GetConfig(void) { return &configuration; }
-const char *GPS_SoftwareVersion(void) { return "unknown"; }
-const char *GPS_HardwareVersion(void) { return "unknown"; }
+const char *GPS_SoftwareVersion(void) { return sw_version; }
+const char *GPS_HardwareVersion(void) { return hw_version; }
+
+/* The RF investigation dump is retired; normal logging never waits for a report. */
+const GPS_QueryResult *GPS_QueryPending(void) { return NULL; }
+void GPS_QuerySaved(void) { }
+unsigned GPS_QueryProgress(void) { return 0; }
+unsigned GPS_QueryCount(void) { return 0; }
+unsigned GPS_ConfigQueryCount(void) { return 0; }

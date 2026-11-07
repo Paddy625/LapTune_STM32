@@ -101,5 +101,19 @@ int main(void)
     GPS_Epoch_ForWindow(row,row+4807,&f);
     assert(f.position_valid && f.time_sync_state==1 && f.rx_us-f.meas_delay_us==at(4200));
     GPS_Epoch_ForWindow(row+9615,row+14422,&repeat); assert(!memcmp(&f,&repeat,sizeof(f)));
+    /* Time-qualified no-fix epochs can maintain the clock, never invent a position. */
+    nav_payloads(4400,pos,vel,sol); sol[8]=2400&255; sol[9]=2400>>8;
+    sol[10]=0; sol[11]=0x0C;
+    GPS_Epoch_Packet(&d,1,2,pos,28,at(4400)+90000);
+    GPS_Epoch_Packet(&d,1,0x12,vel,36,at(4400)+95000);
+    GPS_Epoch_Packet(&d,1,6,sol,52,at(4400)+100000);
+    GPS_Epoch_ForSample(at(4400),&f);
+    assert(!f.position_valid && f.time_valid && f.time_sync_state==1);
+    assert(f.rx_us-f.meas_delay_us==at(4400) && f.itow_ms==4400);
+    /* u-blox 6 reserved fields must not be decoded as newer-generation flags. */
+    lock(); nav(4800); memset(p,0,sizeof(p)); put32(p,5000);
+    p[12]=2400&255; p[13]=2400>>8; p[14]=0x30; p[15]=0xFF;
+    GPS_Time_PulseMessage(p,16,at(4000)+110000); capture(5000);
+    assert(GPS_Time_Diagnostics().state && GPS_Time_Diagnostics().matched==4);
     puts("PASS GPS/PPS: next-pulse identity, 4700ppm scale, latency guards, UTC rollover, loss, bad phase, fractions and historical nearest-row association");
 }

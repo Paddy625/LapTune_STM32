@@ -1,3 +1,5 @@
+> **Archiwum diagnostyki 2.1.8.** Od 2.2.0 ten raport nie jest wykonywany przy starcie. Aktualna obsługa: [GPS 5 Hz i PPS](GPS_PPS.md).
+
 # Konfiguracja GPS i test maski UART — 2.1.8
 
 ## Wgranie i zebranie wyników

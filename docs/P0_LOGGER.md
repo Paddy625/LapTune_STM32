@@ -1,12 +1,7 @@
-> **2.1.8:** [aktualna procedura](GPS_CONFIG_QUERY.md) wykonuje jeden test maski wyjściowej UART1, pełny przegląd publicznej konfiguracji i okresowy odczyt stanu GPS. Bez resetu i zapisu ustawień do pamięci nieulotnej.
+# Kontrakt loggera 2.2.0 (P0 + mapowanie PPS)
 
-> **2.1.7:** aktualna wersja tylko odczytuje ustawienia do [GPS_CFG.TXT](GPS_CONFIG_QUERY.md). Nie uruchamia procedury przywracania ani resetu opisanej w historii poniżej.
-
-> **Aktualizacja 2.1.6:** GPS wrócił do odbioru NMEA 9600 baud / domyślnie 1 Hz. Konfiguracja 5 Hz, epoki UBX i PPS opisane poniżej są historyczne i nie działają w tej wersji. Aktualny przebieg i ograniczenia: [GPS_RESTORE.md](GPS_RESTORE.md).
-
-# Kontrakt loggera 2.1.0 (P0 + mapowanie PPS)
-
-**Aktualne zmiany 2.1.5:** [Jednorazowe przywrócenie GPS](GPS_RESTORE.md). Zmiany 2.1.4: [GPS bez automatycznych restartów i IMU bez SD](GPS_DIAGNOSTICS.md). [Mapowanie PPS](GPS_PPS.md). Historyczny przegląd P0: [P0_REVIEW_2026-11-02.md](P0_REVIEW_2026-11-02.md).
+Aktualny profil i uruchomienie: [GPS 5 Hz](GPS_NEO6M.md), [PPS i UTC](GPS_PPS.md).
+Historyczny przegląd P0: [P0_REVIEW_2026-11-02.md](P0_REVIEW_2026-11-02.md).
 
 P0 wprowadza niezależny czas IMU, rzeczywiste zdarzenia DRDY, spójne epoki
 UBX, osobne sesje uruchomień i diagnostykę braków. Zachowuje **104 Hz,
