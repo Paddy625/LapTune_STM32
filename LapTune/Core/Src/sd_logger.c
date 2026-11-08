@@ -296,7 +296,7 @@ static unsigned format(char *out,unsigned capacity,const struct Record *r,uint32
     }
     SEP();
     for (unsigned i=0;i<6;++i) {
-        if (!r->imu.flags) fixed(&w,(int64_t)r->imu.raw[i]*(i<3 ? 488 : 70000),1000000,6);
+        if (!r->imu.flags) fixed(&w,(int64_t)r->imu.raw[i]*(i<3 ? LSM6DS3_ACCEL_UG_LSB : LSM6DS3_GYRO_UDPS_LSB),1000000,6);
         SEP();
     }
     if (r->gps.position_valid) fixed(&w,r->gps.latitude_e7,10000000,7);

@@ -1,4 +1,4 @@
-# GPS i PPS — firmware 2.2.2
+# GPS i PPS — firmware 2.2.3
 
 GPS pracuje z częstotliwością **5 Hz**. LSM6DS3 pracuje z natywną ODR
 **104 Hz**; nie ma ustawienia 100 Hz. Rejestrowane są rzeczywiste zbocza DRDY,
@@ -148,7 +148,7 @@ Od 2.2.2 dodatkowe liczniki NAV-TIMEUTC zajmują 112 B RAM.
 
 ## Kontrola po wgraniu
 
-- TFT: `LAPTUNE 2.2.2`; zachowaj przewody INT1/INT2 oddalone od toru antenowego GPS.
+- TFT: `LAPTUNE 2.2.3`; zachowaj przewody INT1/INT2 oddalone od toru antenowego GPS.
 - SESSION: `gps_configuration_state=1`, `gps_measurement_ms=200`, `gps_uart_baud=38400`.
 - `pps_configuration_state=1` potwierdza ustawienia wyjścia, nie synchronizację.
   `pps_pulses` i `pps_timtp_packets` powinny rosnąć. Po trzech zgodnych parach:

@@ -1,6 +1,6 @@
 GPIO_TypeDef gpio_a,gpio_b; SPI_HandleTypeDef hspi2;
 uint8_t lsm6ds3_registers[16],lsm6ds3_config_verified;
-static uint8_t registers[128]={[0x0F]=0x69,[0x10]=0x44,[0x11]=0x4C,[0x12]=0x44,[0x13]=4};
+static uint8_t registers[128]={[0x0F]=0x69,[0x10]=0x4C,[0x11]=0x44,[0x12]=0x44,[0x13]=4};
 #ifndef IMU_FIXTURE_EXTERNAL_CLOCK
 static uint64_t now;
 uint64_t Timebase_NowUs(void) { return now; }

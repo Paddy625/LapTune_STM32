@@ -7,10 +7,12 @@
 int main(void)
 {
     ImuRecord r; corrupt_configuration=1; assert(!ImuStream_Start()); corrupt_configuration=0;
+    registers[0x10]=0x44; registers[0x11]=0x4C; /* Old +/-16g / +/-2000 dps profile must fail readback. */
+    assert(!ImuStream_Start()); registers[0x10]=0x4C; registers[0x11]=0x44;
     assert(ImuStream_Start()); pair(50,0,1); assert(!ImuStream_Pop(&r));
     pair(100,0,1); assert(ImuStream_Pop(&r) && r.nr==2 && r.t_us==now && r.acc_minus_gyro_us==-100);
     assert(r.raw[0]==2048 && r.raw[3]==-1000 && !r.flags);
-    LSM6DS3_Sample s; ImuStream_Scale(&r,&s); assert(s.ax>0.999f && s.ax<1 && s.gx==-70);
+    LSM6DS3_Sample s; ImuStream_Scale(&r,&s); assert(s.ax>0.4997f && s.ax<0.4998f && s.gx==-17.5f);
     pair(501,0,1); assert(ImuStream_Pop(&r) && r.flags==IMU_ERR_PAIR);
     pair(50,1,1); assert(ImuStream_Pop(&r) && r.flags==IMU_ERR_CLIP);
     pair(50,0,0); assert(ImuStream_Pop(&r) && r.flags==IMU_ERR_FRESH);

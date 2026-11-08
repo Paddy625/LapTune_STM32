@@ -38,19 +38,19 @@ static void init_display(void)
 int main(void)
 {
     IMU_DisplayData data = {
-        .accel = {-1.2345f, 0, 16}, .accel_min = {-16,-2,-3}, .accel_max = {16,2,16},
-        .gyro = {-70.05f,0,2293.76f}, .gyro_min = {-2000,-100,-2293.76f},
-        .gyro_max = {2000,100,2293.76f}
+        .accel = {-1.2345f, 0, 8}, .accel_min = {-8,-2,-3}, .accel_max = {8,2,8},
+        .gyro = {-70.05f,0,499.76f}, .gyro_min = {-500,-100,-499.76f},
+        .gyro_max = {500,100,499.76f}
     };
     assert(AccDisplay_Update(0, NULL, 1) == HAL_ERROR);
     init_display(); assert(calls == 2);
     const char *expected[] = {
-        "AX-16.000 -01.235 +16.000",
-        "GX-2000.0 -0070.1 +2000.0",
+        "AX-08.000 -01.235 +08.000",
+        "GX-0500.0 -0070.1 +0500.0",
         "AY-02.000 +00.000 +02.000",
         "GY-0100.0 +0000.0 +0100.0",
-        "AZ-03.000 +16.000 +16.000",
-        "GZ-2293.8 +2293.8 +2293.8"
+        "AZ-03.000 +08.000 +08.000",
+        "GZ-0499.8 +0499.8 +0499.8"
     };
     for (unsigned i=0; i<6; ++i) {
         assert(AccDisplay_Update(tick, &data, 1) == HAL_OK);

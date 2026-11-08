@@ -15,14 +15,18 @@
 #define LSM6DS3_STATUS_REG     0x1EU
 #define LSM6DS3_OUTX_L_G       0x22U
 
-#define LSM6DS3_CTRL1_XL_CONF  0x44U /* 104 Hz, +/-16 g. */
-#define LSM6DS3_CTRL2_G_CONF   0x4CU /* 104 Hz, +/-2000 degrees/s. */
+#define LSM6DS3_CTRL1_XL_CONF  0x4CU /* 104 Hz, +/-8 g; FS_XL=11. */
+#define LSM6DS3_CTRL2_G_CONF   0x44U /* 104 Hz, +/-500 degrees/s; FS_G=01, FS_125=0. */
 #define LSM6DS3_CTRL3_C_CONF   0x44U /* BDU, auto-increment; little-endian, 4-wire. */
 #define LSM6DS3_CTRL4_C_CONF   0x04U /* Disable I2C; use SPI. */
 #define LSM6DS3_XYZ_ENABLE     0x38U
 #define LSM6DS3_DATA_READY     0x03U /* XLDA and GDA. */
-#define LSM6DS3_ACCEL_G_LSB    0.000488f
-#define LSM6DS3_GYRO_DPS_LSB   0.070f
+#define LSM6DS3_ACCEL_RANGE_G  8U
+#define LSM6DS3_GYRO_RANGE_DPS 500U
+#define LSM6DS3_ACCEL_UG_LSB   244U
+#define LSM6DS3_GYRO_UDPS_LSB  17500U
+#define LSM6DS3_ACCEL_G_LSB    (LSM6DS3_ACCEL_UG_LSB / 1000000.0f)
+#define LSM6DS3_GYRO_DPS_LSB   (LSM6DS3_GYRO_UDPS_LSB / 1000000.0f)
 
 #define LSM6DS3_CS_PORT GPIOB
 #define LSM6DS3_CS_PIN  GPIO_PIN_12

@@ -1,5 +1,9 @@
 # Syntetyczny przykład kontraktu P0
 
+Archiwalny przykład używa zakresów ±16 g / ±2000°/s. Od firmware 2.2.3
+nowo generowane sesje mają ±8 g / ±500°/s i odpowiednio inne czułości
+w SESSION.json; jednostki oraz układ kolumn TXT pozostają takie same.
+
 Te dwa pliki wygenerował test integracyjny produkcyjnego loggera i FatFs.
 Nie są zapisem z płytki. MON-VER zawiera celowe znaki cudzysłowu/backslash,
 a dump rejestrów jest zerowy, ponieważ test SD nie uruchamia fizycznego IMU.

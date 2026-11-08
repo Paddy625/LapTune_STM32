@@ -1,11 +1,11 @@
-# Kontrakt loggera 2.2.1 (P0 + mapowanie PPS)
+# Kontrakt loggera 2.2.3 (P0 + mapowanie PPS)
 
 Aktualny profil i uruchomienie: [GPS 5 Hz](GPS_NEO6M.md), [PPS i UTC](GPS_PPS.md).
 Historyczny przegląd P0: [P0_REVIEW_2026-11-02.md](P0_REVIEW_2026-11-02.md).
 
 P0 wprowadza niezależny czas IMU, rzeczywiste zdarzenia DRDY, spójne epoki
-UBX, osobne sesje uruchomień i diagnostykę braków. Zachowuje **104 Hz,
-±16 g, ±2000°/s**, GPS 5 Hz oraz układ TFT. PPS na PA0 jest przechwytywane sprzętowo jako odniesienie skali czasu.
+UBX, osobne sesje uruchomień i diagnostykę braków. Aktualny profil 2.2.3 to **104 Hz,
+±8 g, ±500°/s**, GPS 5 Hz oraz układ TFT. PPS na PA0 jest przechwytywane sprzętowo jako odniesienie skali czasu.
 Czas pomiaru GNSS jest mapowany na MCU przez PPS + TIM-TP. Parametry czasowe poniżej są ustawieniami
 oprogramowania; nie są pomiarem dokładności gotowego urządzenia.
 
@@ -91,8 +91,8 @@ NR;DATA;CZAS;ACC_X;ACC_Y;ACC_Z;GYRO_X;GYRO_Y;GYRO_Z;GPS_LAT;GPS_LON;GPS_SPEED_KM
 | --- | --- |
 | NR | uint32, kolejność pozyskiwania; luki ujawniają straty |
 | DATA, CZAS | pomocnicze UTC `YYYY-MM-DD`, `HH:MM:SS.mmm`; mogą być puste |
-| ACC_X/Y/Z | g z grawitacją; signed raw × 0,000488; 6 miejsc |
-| GYRO_X/Y/Z | °/s; signed raw × 0,070; 6 miejsc |
+| ACC_X/Y/Z | g z grawitacją; signed raw × 0,000244; 6 miejsc |
+| GYRO_X/Y/Z | °/s; signed raw × 0,0175; 6 miejsc |
 | GPS_LAT/LON | stopnie; signed int32 × 1e-7, 7 miejsc |
 | GPS_SPEED_KMH | poziome gSpeed z VELNED × 0,036 km/h; 3 miejsca |
 | GPS_ALT_MSL_M | hMSL z POSLLH × 0,001 m, 3 miejsca; dla 2D puste |

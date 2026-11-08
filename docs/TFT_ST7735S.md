@@ -71,8 +71,8 @@ sprawdź ich wyprowadzenia na nowej płytce KAmod.
   przyspieszenie w g (1 g ≈ 9,80665 m/s²) jest nad żyroskopem w °/s.
   W każdym wierszu wartości są w kolejności MIN, chwilowa, MAX; czcionka
   ma skalę 1. Min/max obu czujników startują od pierwszego pomiaru, nie zera.
-  LSM6DS3 ma ODR 104 Hz, zakres ±16 g i BDU; przelicznik 0,488 mg/LSB.
-  Żyroskop ±2000°/s jest odczytywany do gx/gy/gz i ma własne min/max na TFT.
+  LSM6DS3 ma ODR 104 Hz, zakres ±8 g i BDU; przelicznik 0,244 mg/LSB.
+  Żyroskop ±500°/s jest odczytywany do gx/gy/gz i ma własne min/max na TFT.
 - `main.c`: akwizycja IMU 104 Hz przez osobne DRDY i DMA SPI2, odświeżanie
   ekranu co 100 ms. Jeden wiersz IMU na obieg pętli; bez czyszczenia całego
   ekranu przy każdym pomiarze. Blokujące transmisje TFT mogą opóźnić render,

@@ -75,8 +75,8 @@ FRESULT Session_Write(const char *dir)
     STR("gps_epoch_identity","POSLLH/VELNED/SOL joined by iTOW; measurement time only with qualified PPS mapping");
     STR("gps_states","N=new valid epoch once, R=immutable repetition, I=no valid position");
     WRITE("  \"time_sync_state\": %u, \"t_imu_unit\": \"us\", \"pps_enabled\": true,\n",sync->state);
-    WRITE("  \"imu_odr_hz\": 104, \"acc_range_g\": 16, \"gyro_range_dps\": 2000,\n");
-    WRITE("  \"acc_g_per_lsb\": 0.000488, \"gyro_dps_per_lsb\": 0.070,\n");
+    WRITE("  \"imu_odr_hz\": 104, \"acc_range_g\": %u, \"gyro_range_dps\": %u,\n",LSM6DS3_ACCEL_RANGE_G,LSM6DS3_GYRO_RANGE_DPS);
+    WRITE("  \"acc_g_per_lsb\": 0.%06lu, \"gyro_dps_per_lsb\": 0.%06lu,\n",(unsigned long)LSM6DS3_ACCEL_UG_LSB,(unsigned long)LSM6DS3_GYRO_UDPS_LSB);
     WRITE("  \"who_am_i\": %u,\n",lsm6ds3_registers[5]);
     WRITE("  \"imu_configuration_verified\": %s, \"register_base\": 10, \"registers_0a_to_19\": [",lsm6ds3_config_verified ? "true" : "false");
     for (unsigned i=0;i<16;++i) WRITE("%s%u",i ? "," : "",lsm6ds3_registers[i]);

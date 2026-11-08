@@ -75,7 +75,7 @@ uint8_t ImuStream_Start(void)
     HAL_GPIO_WritePin(LSM6DS3_CS_PORT,LSM6DS3_CS_PIN,GPIO_PIN_SET);
     if (r==HAL_OK && (!LSM6DS3_ReadConfiguration() ||
         lsm6ds3_registers[0]!=0 || lsm6ds3_registers[3]!=1 || lsm6ds3_registers[4]!=2 ||
-        lsm6ds3_registers[5]!=0x69 || lsm6ds3_registers[6]!=0x44 || lsm6ds3_registers[7]!=0x4C ||
+        lsm6ds3_registers[5]!=0x69 || lsm6ds3_registers[6]!=LSM6DS3_CTRL1_XL_CONF || lsm6ds3_registers[7]!=LSM6DS3_CTRL2_G_CONF ||
         lsm6ds3_registers[8]!=0x44 || lsm6ds3_registers[9]!=4)) r=HAL_ERROR;
     lsm6ds3_config_verified=r==HAL_OK;
     memset(tx,0xFF,sizeof(tx)); tx[0]=0x9E;

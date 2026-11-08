@@ -136,7 +136,7 @@ static void test_contract(void)
     r=record(7,t+1380000); r.flags=IMU_ERR_SPI; append_raw(&r,(LogTime){0}); stop();
     assert(sd_log_written==6 && !sd_log_dropped && sd_max_pause_us);
     char *text=read_log("LOG0001.TXT",6);
-    assert(strstr(text,"3;2026-11-01;12:13:14.123;0.999424;-0.999424;0.000488;70.000000;-70.000000;0.070000;52.1234567;21.5678901;44.424;123.456;7200000001;N;1;1000;1;0;7199999926;7200000001;"));
+    assert(strstr(text,"3;2026-11-01;12:13:14.123;0.499712;-0.499712;0.000244;17.500000;-17.500000;0.017500;52.1234567;21.5678901;44.424;123.456;7200000001;N;1;1000;1;0;7199999926;7200000001;"));
     assert(strstr(text,"7200009616;R;1;1000;"));
     assert(strstr(text,"7200200001;N;2;1200;"));
     assert(strstr(text,";52.1234567;21.5678901;;;7200580001;N;3;1400;"));
@@ -212,7 +212,7 @@ static void test_workspace_and_packing(void)
     char *text=read_log("LOG0001.TXT",16),*line=strstr(text,"\r\n")+2;
     for (unsigned n=1;n<=16;++n) {
         char *end; assert(strtoul(line,&end,10)==n && *end==';');
-        assert(strstr(line,";15.990296;-15.990784;15.990296;-2293.760000;2293.690000;-2293.760000;"));
+        assert(strstr(line,";7.995148;-7.995392;7.995148;-573.440000;573.422500;-573.440000;"));
         line=strstr(line,"\r\n")+2;
     }
     assert(!*line); free(text);

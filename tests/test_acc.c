@@ -78,10 +78,10 @@ int main(void)
     reset_mock(); registers[0x0F] = 0x33; /* Reject the old LIS3DH. */
     assert(!LSM6DS3_Init() && !selected);
     reset_mock(); assert(LSM6DS3_Init() && !selected && delays==2);
-    assert(registers[0x10]==0x44 && registers[0x11]==0x4C);
+    assert(registers[0x10]==0x4C && registers[0x11]==0x44);
     assert(registers[0x12]==0x44 && registers[0x13]==0x04);
     assert(registers[0x18]==0x38 && registers[0x19]==0x38);
-    assert(LSM6DS3_ReadConfiguration() && lsm6ds3_registers[5]==0x69 && lsm6ds3_registers[6]==0x44 && lsm6ds3_registers[7]==0x4C);
+    assert(LSM6DS3_ReadConfiguration() && lsm6ds3_registers[5]==0x69 && lsm6ds3_registers[6]==0x4C && lsm6ds3_registers[7]==0x44);
     LSM6DS3_Sample s = {1,2,3,4,5,6}, old=s;
     assert(LSM6DS3_ReadSample(NULL)==LSM6DS3_READ_ERROR && !selected);
     for (uint8_t ready=0; ready<3; ++ready) {
@@ -91,10 +91,10 @@ int main(void)
     }
     registers[0x1E] = 3;
     assert(LSM6DS3_ReadSample(&s)==LSM6DS3_READ_OK && !selected && bursts==1);
-    assert(fabsf(s.ax-0.999424f)<0.00001f && fabsf(s.ay+0.999424f)<0.00001f);
-    assert(fabsf(s.az-15.990296f)<0.00001f);
-    assert(fabsf(s.gx-70.0f)<0.0001f && fabsf(s.gy+70.0f)<0.0001f);
-    assert(fabsf(s.gz+2293.76f)<0.001f);
+    assert(fabsf(s.ax-0.499712f)<0.00001f && fabsf(s.ay+0.499712f)<0.00001f);
+    assert(fabsf(s.az-7.995148f)<0.00001f);
+    assert(fabsf(s.gx-17.5f)<0.0001f && fabsf(s.gy+17.5f)<0.0001f);
+    assert(fabsf(s.gz+573.44f)<0.001f);
     old=s;
     fail_tx_at=tx_calls+1;
     assert(LSM6DS3_ReadSample(&s)==LSM6DS3_READ_ERROR); unchanged(&s,&old);
@@ -118,7 +118,7 @@ int main(void)
     assert(LSM6DS3_ReadFIFO(&s,&pending)==LSM6DS3_READ_NOT_READY && pending==0);
     registers[0x3A]=12;
     assert(LSM6DS3_ReadFIFO(&s,&pending)==LSM6DS3_READ_OK && pending==2);
-    assert(registers[0x3A]==6 && fabsf(s.gx-70)<0.0001f);
+    assert(registers[0x3A]==6 && fabsf(s.gx-17.5f)<0.0001f);
     old=s; registers[0x3B]=0x40;
     assert(LSM6DS3_ReadFIFO(&s,&pending)==LSM6DS3_READ_OVERFLOW); unchanged(&s,&old);
     registers[0x3B]=0; registers[0x3C]=1;

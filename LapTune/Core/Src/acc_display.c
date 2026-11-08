@@ -29,7 +29,7 @@ HAL_StatusTypeDef AccDisplay_Init(void)
     last_refresh = HAL_GetTick() - 1000U;
     if (TFT_Text(4, 0, "LAPTUNE " LAPTUNE_FIRMWARE_VERSION, 2, TFT_RED, TFT_BLACK) != HAL_OK)
         return HAL_ERROR;
-    return TFT_Text(4, 120, "ACC +/-16G GPS", 1, TFT_GREY, TFT_BLACK);
+    return TFT_Text(4, 120, "ACC +/-8G GPS", 1, TFT_GREY, TFT_BLACK);
 }
 
 HAL_StatusTypeDef AccDisplay_Update(uint32_t now, const IMU_DisplayData *data,

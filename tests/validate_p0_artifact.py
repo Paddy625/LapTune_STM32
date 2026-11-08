@@ -32,7 +32,7 @@ for row in rows:
 assert rows[1]['GPS_LAT'] == rows[2]['GPS_LAT'] == rows[3]['GPS_LAT']
 assert rows[1]['GPS_FIX_ID'] == rows[2]['GPS_FIX_ID'] != rows[3]['GPS_FIX_ID']
 assert rows[1]['T_IMU_US'] == '7200000001'
-assert rows[1]['ACC_X'] == '0.999424' and rows[1]['GYRO_Y'] == '-70.000000'
+assert rows[1]['ACC_X'] == '0.499712' and rows[1]['GYRO_Y'] == '-17.500000'
 assert not rows[4]['GPS_ALT_MSL_M'] and not rows[4]['GPS_SPEED_KMH']
 print('PASS independent CSV/JSON consumer: schema, numeric fields, exact values, N/R/I and invalid vectors')
 
@@ -54,3 +54,7 @@ assert metadata['gps_timeutc_last_rejected_reason'] == 1 and metadata['gps_timeu
 assert metadata['gps_timeutc_last_rejected_payload'] == [0]*12 + [234, 7, 11, 7, 0, 0, 0, 3]
 assert all(metadata['gps_timeutc_rejected_' + reason] == 0 for reason in ['calendar', 'nano', 'length'])
 print('PASS TIMEUTC metadata: preserved rejection payload, validity histogram and 64-bit first-accept time')
+
+assert metadata['acc_range_g'] == 8 and metadata['gyro_range_dps'] == 500
+assert metadata['acc_g_per_lsb'] == 0.000244 and metadata['gyro_dps_per_lsb'] == 0.0175
+assert rows[1]['ACC_Z'] == '0.000244' and rows[1]['GYRO_Z'] == '0.017500'

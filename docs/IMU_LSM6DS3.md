@@ -34,19 +34,31 @@ sygnały układu. Przed zasileniem sprawdź je na swojej płytce/dokumentacji.
 
 | Parametr | Akcelerometr | Żyroskop |
 | --- | --- | --- |
-| Zakres | ±16 g | ±2000°/s |
+| Zakres | ±8 g | ±500°/s |
 | ODR | 104 Hz | 104 Hz |
 | Format wyjściowy | signed 16 bit, little-endian | signed 16 bit, little-endian |
-| Przelicznik | 0,000488 g/LSB | 0,070°/s/LSB |
+| Przelicznik | 0,000244 g/LSB | 0,0175°/s/LSB |
 | Zmienne w `main.c` | `ax`, `ay`, `az` | `gx`, `gy`, `gz` |
 
-P0 zachowuje 104 Hz i dotychczasowe zakresy. FIFO jest wyłączone. Osobne
+Od firmware 2.2.3 zakresy wynoszą ±8 g i ±500°/s; ODR pozostaje 104 Hz. FIFO jest wyłączone. Osobne
 zbocza DRDY oznaczają nowe wektory ACC/GYRO; po obu zboczach SPI2 DMA pobiera
 status i sześć osi. Próbki trafiają do pierścienia RAM bez udziału FatFs.
 Szczegóły, warunek parowania 500 µs i ograniczenia czasu fizycznego pomiaru:
 [P0_LOGGER.md](P0_LOGGER.md).
 Przyspieszenie obejmuje grawitację. Żyroskop daje prędkość kątową, nie kąty
 obrotu; nie dodano całkowania, fuzji danych ani kalibracji biasu.
+
+W 2.2.3 `CTRL1_XL=0x4C` (104 Hz, FS_XL=11 → ±8 g),
+`CTRL2_G=0x44` (104 Hz, FS_G=01, FS_125=0 → ±500°/s).
+Odczyt zwrotny rejestrów jest wymagany przed uruchomieniem akwizycji.
+Skale w `acc.h` są wspólne dla odczytu, TFT, formattera TXT i metadanych.
+
+W porównaniu z poprzednimi ±16 g / ±2000°/s krok pomiaru jest odpowiednio
+2× i 4× mniejszy. Zawęża to zakres pomiarowy; nie stanowi kalibracji szumu,
+biasu ani gwarancji takiej samej poprawy dokładności bezwzględnej.
+Kolumny ACC pozostają w g, a GYRO w °/s — aplikacja nie powinna ponownie
+mnożyć zapisanych wartości przez czułość. Stare sesje zachowują własne metadane.
+Kolejność i znaki osi, ODR, DRDY, PPS oraz GPS 5 Hz pozostają bez zmian.
 
 ## Sterownik
 
@@ -87,19 +99,19 @@ w °/s. Każda kolumna ma siedem znaków; przyspieszenie ma trzy miejsca po
 przecinku, a żyroskop jedno. Przykład jednej pary (MIN, chwilowa, MAX):
 
 ```text
-AX-16.000 +00.123 +16.000
-GX-2000.0 -0070.1 +2000.0
+AX-08.000 +00.123 +08.000
+GX-0500.0 -0070.1 +0500.0
 ```
 
 Wiersze AX/GX, AY/GY, AZ/GZ zaczynają się odpowiednio na y=18/26, 36/44,
 54/62, czcionka 5×7 ze skalą 1. Każdy zajmuje 8 pikseli wysokości.
-GPS zajmuje y=72..119; jego konfigurację 5 Hz i odświeżanie co 200 ms opisuje
+GPS zajmuje y=72..119; jego konfigurację pomiarów 5 Hz opisuje
 [GPS_NEO6M.md](GPS_NEO6M.md). Nagłówek jest zachowany; stopka pokazuje status SD.
 
 Minima i maksima obu czujników są inicjalizowane pierwszą poprawną próbką
 oraz aktualizowane po każdym udanym odczycie. Zmienne żyroskopu to
 `gx/gy/gz`, `min_gx/min_gy/min_gz`, `max_gx/max_gy/max_gz`. Cała ramka IMU
-korzysta ze wspólnej migawki danych co 100 ms, a jedno wywołanie rysuje jeden
+korzysta ze wspólnej migawki danych nie częściej niż co 1 s, a jedno wywołanie rysuje jeden
 wiersz. Przy błędzie wszystkie trzy pola danego wiersza są zastępowane
 kreskami. Stała szerokość tekstu usuwa poprzednie cyfry.
 
